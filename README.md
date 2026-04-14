@@ -13,10 +13,10 @@ cognilite  ›  gemma4:e2b ●  ctx 12% / 128k
 │ Assistant                                                │
 │   Let me check.                                          │
 │                                                          │
-│   ⚙ cat  app.rs  18.4 KB                                │
-│   ▎ pub struct App {                                     │
-│   ▎     pub screen: Screen,                             │
-│   ▎ ...                                                  │
+│  ⚙ Terminal › cat  app.rs  18.4 KB                      │
+│  ▎ pub struct App {                                      │
+│  ▎     pub screen: Screen,                               │
+│  ▎ ...                                                   │
 │                                                          │
 │   app.rs holds all application state. The App struct    │
 │   contains the message history, input buffer...          │
@@ -26,7 +26,7 @@ cognilite  ›  gemma4:e2b ●  ctx 12% / 128k
 ╭──────────────────────────────────────────────────────────╮
 │ > _                                                      │
 ╰──────────────────────────────────────────────────────────╯
-[Enter] send  [Ctrl+N] newline  [Ctrl+L] clear  [Alt+↑/↓] scroll  [@path] attach  [Esc] models
+[Enter] send  [Ctrl+N] newline  [Esc] models  [F1] help
 ```
 
 ## Features
@@ -37,10 +37,11 @@ cognilite  ›  gemma4:e2b ●  ctx 12% / 128k
 - **Markdown rendering** — `**bold**`, `*italic*`, `` `inline code` ``, headings (`#`, `##`, `###`), and bullet/numbered lists
 - **Code block rendering** — fenced ` ``` ` blocks rendered with a language label and `▎` left gutter
 - **File attachments** (`@path` syntax) — attach text files or images with path autocomplete; context-aware size validation, deduplication, and prompt feedback while processing
-- **Behaviours** — tool definitions that teach the model to autonomously read files and invoke actions; extensible via `.toml` files
+- **Neurons** — groups of tools and instructions that extend the model's capabilities; extensible via `.toml` files placed in `.cognilite/neurons/`
 - **Context window tracking** — header shows `ctx X% / Nk`; warnings appear at 80%, 90%, and 100% usage
-- **Token stats** — after each response: `tok/s · response tokens · prompt tokens · duration` (auto-formatted: seconds, minutes, or hours)
-- **Multiline input** — `Ctrl+N` inserts a newline; cursor moves between lines with `↑`/`↓`
+- **Token stats** — after each response: `tok/s · response tokens · prompt tokens · duration`
+- **Multiline input** — `Ctrl+N` inserts a newline; input box grows automatically as you type; full readline-style editing shortcuts
+- **Paste support** — paste multiline text from clipboard; newlines are preserved
 - **Stop generation** — `Esc` while streaming cancels the current response
 - **TTY compatible** — no kitty protocol, no sixel, degrades gracefully on any terminal
 
@@ -70,26 +71,53 @@ cargo build --release
 | `↑` / `k` | Move cursor up |
 | `↓` / `j` | Move cursor down |
 | `Enter` | Select model and open chat |
-| `q` | Quit |
-| `Ctrl+C` | Quit |
+| `q` / `Ctrl+C` | Quit |
 
 ### Chat screen
+
+#### Sending
 
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
-| `Ctrl+N` | Insert newline (multiline input) |
-| `↑` / `↓` | Move cursor between input lines (single-line: scroll messages) |
+| `Ctrl+N` | Insert newline |
+| `Esc` (streaming) | Stop generation |
+| `Esc` (idle) | Back to model select |
+
+#### Cursor movement
+
+| Key | Action |
+|-----|--------|
+| `←` / `→` | Move one character |
+| `Ctrl+←` / `Alt+←` | Move one word left |
+| `Ctrl+→` / `Alt+→` | Move one word right |
+| `Ctrl+A` / `Home` | Beginning of line |
+| `Ctrl+E` / `End` | End of line |
+| `↑` / `↓` | Move between lines (multiline input) |
+
+#### Editing
+
+| Key | Action |
+|-----|--------|
+| `Backspace` / `Delete` | Delete character |
+| `Ctrl+W` | Delete word before cursor |
+| `Ctrl+K` | Delete to end of line |
+| `Ctrl+U` | Delete to beginning of line |
+
+#### Scrolling
+
+| Key | Action |
+|-----|--------|
 | `Alt+↑` / `Alt+↓` | Scroll message history |
 | `Page Up` / `Page Down` | Scroll message history (10 lines) |
 | `Ctrl+End` | Jump to bottom, re-enable auto-scroll |
-| `End` | Move input cursor to end of line |
-| `Home` | Move input cursor to start of line |
-| `←` / `→` | Move input cursor left/right |
-| `Backspace` / `Delete` | Delete character |
-| `Ctrl+L` | Clear chat history |
-| `Esc` (streaming) | Stop generation |
-| `Esc` (idle) | Go back to model select |
+
+#### Other
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+L` | Clear conversation |
+| `F1` | Toggle keyboard shortcut help popup |
 | `Ctrl+C` | Quit |
 
 ### Path autocomplete popup
@@ -138,60 +166,73 @@ Type `@` followed by a file path anywhere in your message:
 
 **Deduplication:** attaching the same path twice in one message is silently collapsed to a single attachment.
 
-**Prompt feedback:** while the model processes the input (prompt evaluation phase), the assistant area shows `Processing… Xs▋` with elapsed time.
+## Neurons
 
-**Display:** `@ref` tokens are highlighted in the input, condensed to `@filename` in message history, and shown as attachment pills:
-- `≡ filename  4.2 KB` — text file
-- `⬡ filename  128 KB` — image
+Neurons are groups of capabilities loaded at startup. Each neuron can contain:
 
-## Behaviours
+- **Synapses** — specific tools the model can invoke by wrapping a command in `<tool>` tags
+- **Thoughts** — markdown files injected into the system prompt that shape how the model reasons
+- **Terminal passthrough** — a neuron with `shell = true` lets the model run any Linux command directly
 
-Behaviours are tool definitions that let the model autonomously invoke actions during a response — without the user having to trigger them manually.
+When the model outputs `<tool>command args</tool>`, cognilite intercepts the tag, runs the command in the working directory, injects the result as `Tool result:`, and resumes the stream so the model can continue with the output in context.
 
-When the model needs to use a tool it outputs `<tool>name args</tool>`. The app intercepts that tag, executes the tool, injects the result as `Tool result:` in the conversation, and restarts the stream so the model can continue with the result in context.
+### Built-in neurons
 
-### How the model learns about tools
+| Neuron | Description |
+|--------|-------------|
+| `Knowledge` | Self-awareness: how cognilite works, tool execution flow, transparency rules |
+| `Terminal` | Shell passthrough — runs any standard Linux command (`ls`, `cat`, `grep`, `find`, …) |
 
-At model selection time, cognilite builds a tool context block from all loaded behaviours and injects it as a system message at the start of every conversation. The context lists available tools and includes few-shot examples from each behaviour file, so the model knows when and how to call them.
+### Adding a neuron
 
-### Built-in behaviours
+Create a directory under `.cognilite/neurons/<name>/` in your project (or `~/.config/cognilite/neurons/<name>/` for global neurons):
 
-| Trigger | Description |
-|---------|-------------|
-| `cat`   | Read a file and return its contents |
-
-### Adding behaviours
-
-Behaviour files are `.toml` files with an optional `---` separator followed by a few-shot example body.
-
-**Tool behaviour** (executes Rust code, result injected into context):
-
-```toml
-trigger = cat
-kind = tool
-action = cat
-description = Read a file and return its contents
-usage = cat <path>
----
-User: what does src/main.rs contain?
-Assistant: <tool>cat src/main.rs</tool>
-Tool result:
-fn main() { println!("hello"); }
-
-A simple entry point that prints hello to stdout.
+```
+.cognilite/neurons/git/
+├── neuron.toml          # name and description
+├── thoughts/
+│   └── rules.md         # instructions injected into the system prompt
+└── synapses/
+    └── git-log.toml     # a specific tool definition
 ```
 
-The `---` section is the few-shot example shown to the model so it learns the calling convention.
+**`neuron.toml`:**
+```toml
+name = "Git"
+description = "Run git commands to inspect the repository"
+```
 
-### Behaviour loading order
+**`synapses/git-log.toml`:**
+```toml
+trigger = "git-log"
+kind = "tool"
+command = "git log --oneline -20"
+description = "Show the last 20 commits"
+usage = "git-log"
+---
+User: what changed recently?
+Assistant: <tool>git-log</tool>
+Tool result:
+a1b2c3d fix login bug
+e4f5g6h add dark mode
 
-Behaviours are loaded in this order — later entries with the same trigger override earlier ones:
+The last two commits fixed a login bug and added dark mode.
+```
 
-1. **Built-ins** — embedded in the binary at compile time from `behaviours/*.toml`
-2. **Project-local** — `.cognilite/behaviours/*.toml` in the working directory
-3. **User-global** — `~/.config/cognilite/behaviours/*.toml`
+**Shell passthrough** (run any command, no synapse files needed):
+```toml
+name = "Terminal"
+description = "Execute Linux commands"
+shell = true
+```
 
-Built-in behaviour files live in `behaviours/` in the repo and are embedded via `include_str!` — no external files are required at runtime.
+### Neuron loading order
+
+1. **Built-ins** — embedded in the binary at compile time
+2. **Project-local** — `.cognilite/neurons/` in the working directory
+3. **User-global** — `~/.config/cognilite/neurons/`
+
+Later entries with the same trigger override earlier ones.
 
 ## Context Window
 
@@ -208,21 +249,20 @@ In-chat warnings appear at:
 - **90%** — red warning, suggests starting a new conversation
 - **100%** — full block with `[Ctrl+L]` and `[Esc]` instructions
 
-Context length is fetched from `/api/show` at model selection time and used across the session.
-
 ## Architecture
 
 ```
 src/
 ├── main.rs        — entry point, event loop, model loading
-├── app.rs         — App state, message types, input handling, attachment resolution, tool loop
-├── behaviour.rs   — Behaviour types, built-in loading, tool context builder, .toml parser
+├── app.rs         — App state, message types, input editing, attachment resolution, tool loop
+├── synapse.rs     — Neuron/Synapse types, built-in loading, tool context builder, .toml parser
 ├── events.rs      — key event dispatch (model select / chat)
 ├── ollama.rs      — Ollama API: list_models, stream_chat, fetch_context_length
-└── ui.rs          — ratatui rendering: model select, chat, markdown, code blocks
+└── ui.rs          — ratatui rendering: model select, chat, markdown, code blocks, popups
 
-behaviours/
-└── cat.toml       — built-in cat tool (embedded in binary at compile time)
+neurons/
+├── knowledge/     — built-in Knowledge neuron (thoughts injected as system prompt)
+└── terminal/      — built-in Terminal neuron (shell passthrough)
 ```
 
 ### Key types (`app.rs`)
@@ -239,20 +279,22 @@ struct App {
     context_length: Option<u64>,
     working_dir: PathBuf,
     completion: Option<Completion>, // active @path autocomplete popup
-    behaviours: Vec<Behaviour>,
+    neurons: Vec<Neuron>,
     tool_context: String,        // built once at model selection, injected each request
 }
 
-struct Behaviour {
-    trigger: String,
+struct Neuron {
+    name: String,
     description: String,
-    kind: BehaviourKind,         // Tool { action, usage, example }
+    shell: bool,                 // true → any trigger runs as a shell command
+    system_prompt: String,       // concatenated thoughts
+    synapses: Vec<Synapse>,
 }
 
 struct Message {
     role: Role,              // User | Assistant | Tool
     content: String,         // display text
-    llm_content: String,     // what gets sent to the model (includes file bodies / tool results)
+    llm_content: String,     // sent to the model (includes file bodies / tool results)
     images: Vec<String>,     // base64-encoded images
     attachments: Vec<Attachment>,
     thinking: String,
@@ -265,12 +307,13 @@ struct Message {
 A background thread spawned by `start_stream()` reads the NDJSON stream from `/api/chat` and sends `StreamChunk` values over an `mpsc::channel`. The main loop calls `app.poll_stream()` via `try_recv()` every 30 ms while streaming, 200 ms when idle.
 
 `poll_stream` scans the accumulated assistant content for a complete `<tool>...</tool>` tag after each chunk. When found:
+
 1. The tag is stripped from the display content
 2. The current stream is stopped
 3. `handle_tool_call` executes the tool and pushes a `Role::Tool` message with `llm_content = "Tool result:\n<result>"`
 4. `start_stream` restarts with the full conversation (including the tool result) so the model can continue
 
-Tool messages are sent to Ollama as `"user"` role turns, which is compatible with base models that don't have a native tool-call protocol.
+Tool messages are sent to Ollama as `"user"` role turns, compatible with base models that don't have a native tool-call protocol.
 
 Thinking models send a `message.thinking` field in early chunks before `message.content` begins. Both are accumulated separately and rendered in different colors.
 

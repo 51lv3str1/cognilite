@@ -1,6 +1,18 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::app::{App, Screen, StreamState};
 
+pub fn handle_paste(app: &mut App, text: &str) {
+    if app.screen != Screen::Chat {
+        return;
+    }
+    for c in text.chars() {
+        if c != '\r' {
+            app.input_insert(c);
+        }
+    }
+    app.update_completion();
+}
+
 pub fn handle_key(app: &mut App, key: KeyEvent) {
     // global quit
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -36,18 +48,41 @@ fn handle_model_select(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_chat(app: &mut App, key: KeyEvent) {
+    // F1 toggles help popup; while open only scrolling and close keys work
+    if key.code == KeyCode::F(1) {
+        app.show_help = !app.show_help;
+        app.help_scroll = 0;
+        return;
+    }
+    if app.show_help {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.show_help = false,
+            KeyCode::Up   | KeyCode::Char('k') => app.help_scroll = app.help_scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => app.help_scroll = app.help_scroll.saturating_add(1),
+            KeyCode::PageUp   => app.help_scroll = app.help_scroll.saturating_sub(10),
+            KeyCode::PageDown => app.help_scroll = app.help_scroll.saturating_add(10),
+            _ => {}
+        }
+        return;
+    }
+
     // completion popup intercepts Esc, Tab, Up, Down
     if app.completion.is_some() {
         match key.code {
-            KeyCode::Esc => { app.complete_dismiss(); return; }
+            KeyCode::Esc               => { app.complete_dismiss(); return; }
             KeyCode::Tab | KeyCode::Enter => { app.complete_accept(); return; }
-            KeyCode::Up => { app.complete_prev(); return; }
-            KeyCode::Down => { app.complete_next(); return; }
+            KeyCode::Up                => { app.complete_prev(); return; }
+            KeyCode::Down              => { app.complete_next(); return; }
             _ => {}
         }
     }
 
+    let ctrl  = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt   = key.modifiers.contains(KeyModifiers::ALT);
+
     match key.code {
+        // ── send / cancel / navigate screens ────────────────────────────────
+        KeyCode::Enter  => app.send_message(),
         KeyCode::Esc => {
             if app.stream_state == StreamState::Streaming {
                 app.stop_stream();
@@ -56,22 +91,32 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
                 app.screen = Screen::ModelSelect;
             }
         }
-        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.input_newline();
-            app.update_completion();
-        }
-        KeyCode::Enter => app.send_message(),
-        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.clear_chat();
-        }
-        // scroll messages (Alt) or move cursor between input lines (no modifier)
-        KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => {
-            app.auto_scroll = false;
-            app.scroll = app.scroll.saturating_sub(1);
-        }
-        KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
-            app.scroll = app.scroll.saturating_add(1);
-        }
+
+        // ── newline ──────────────────────────────────────────────────────────
+        KeyCode::Char('n') if ctrl => { app.input_newline(); app.update_completion(); }
+
+        // ── line navigation (readline style) ────────────────────────────────
+        KeyCode::Char('a') if ctrl => app.input_home(),
+        KeyCode::Char('e') if ctrl => app.input_end(),
+        KeyCode::Home               => app.input_home(),
+        KeyCode::End if ctrl        => { app.auto_scroll = true; }
+        KeyCode::End                => app.input_end(),
+
+        // ── word navigation ──────────────────────────────────────────────────
+        KeyCode::Left  if ctrl || alt => { app.input_move_word_left();  app.update_completion(); }
+        KeyCode::Right if ctrl || alt => { app.input_move_word_right(); app.update_completion(); }
+
+        // ── kill / clear ─────────────────────────────────────────────────────
+        KeyCode::Char('k') if ctrl => app.input_kill_to_end(),
+        KeyCode::Char('u') if ctrl => app.input_kill_to_start(),
+        KeyCode::Char('w') if ctrl => { app.input_delete_word_before(); app.update_completion(); }
+        KeyCode::Char('l') if ctrl => app.clear_chat(),
+
+        // ── cursor movement ──────────────────────────────────────────────────
+        KeyCode::Left  => { app.input_move_left();  app.update_completion(); }
+        KeyCode::Right => { app.input_move_right(); app.update_completion(); }
+        KeyCode::Up if alt => { app.auto_scroll = false; app.scroll = app.scroll.saturating_sub(1); }
+        KeyCode::Down if alt => { app.scroll = app.scroll.saturating_add(1); }
         KeyCode::Up => {
             if app.input_line_count() > 1 {
                 app.input_move_up();
@@ -89,33 +134,14 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
             }
             app.update_completion();
         }
-        KeyCode::PageUp => {
-            app.auto_scroll = false;
-            app.scroll = app.scroll.saturating_sub(10);
-        }
-        KeyCode::PageDown => {
-            app.scroll = app.scroll.saturating_add(10);
-        }
-        KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.auto_scroll = true;
-        }
-        KeyCode::End => app.input_end(),
-        // input editing
-        KeyCode::Char(c) => {
-            app.input_insert(c);
-            app.update_completion();
-        }
-        KeyCode::Backspace => {
-            app.input_backspace();
-            app.update_completion();
-        }
-        KeyCode::Delete => {
-            app.input_delete();
-            app.update_completion();
-        }
-        KeyCode::Left => { app.input_move_left(); app.update_completion(); }
-        KeyCode::Right => { app.input_move_right(); app.update_completion(); }
-        KeyCode::Home => app.input_home(),
+        KeyCode::PageUp   => { app.auto_scroll = false; app.scroll = app.scroll.saturating_sub(10); }
+        KeyCode::PageDown => { app.scroll = app.scroll.saturating_add(10); }
+
+        // ── character editing ────────────────────────────────────────────────
+        KeyCode::Char(c) => { app.input_insert(c); app.update_completion(); }
+        KeyCode::Backspace => { app.input_backspace(); app.update_completion(); }
+        KeyCode::Delete    => { app.input_delete();    app.update_completion(); }
+
         _ => {}
     }
 }

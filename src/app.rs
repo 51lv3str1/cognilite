@@ -54,6 +54,7 @@ pub struct Message {
     pub attachments: Vec<Attachment>,
     pub thinking: String,
     pub stats: Option<TokenStats>,
+    pub tool_call: Option<String>, // "Neuron › trigger" label, set for Role::Tool messages
 }
 
 #[derive(Debug, PartialEq)]
@@ -93,11 +94,13 @@ pub struct App {
     pub stream_rx: Option<mpsc::Receiver<StreamChunk>>,
     pub stream_started_at: Option<std::time::Instant>,
     pub completion: Option<Completion>,
-    // behaviours
-    pub behaviours: Vec<crate::behaviour::Behaviour>,
+    // neurons (groups of synapses)
+    pub neurons: Vec<crate::synapse::Neuron>,
     pub tool_context: String,
     // misc
     pub should_quit: bool,
+    pub show_help: bool,
+    pub help_scroll: u16,
 }
 
 impl App {
@@ -123,21 +126,23 @@ impl App {
             stream_rx: None,
             stream_started_at: None,
             completion: None,
-            behaviours: {
-                let mut b = crate::behaviour::built_ins();
+            neurons: {
+                let mut n = crate::synapse::built_ins();
                 let local = std::env::current_dir()
                     .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                    .join(".cognilite/behaviours");
-                b.extend(crate::behaviour::load_from_dir(&local));
+                    .join(".cognilite/neurons");
+                n.extend(crate::synapse::load_from_dir(&local));
                 if let Ok(home) = std::env::var("HOME") {
                     let global = std::path::PathBuf::from(home)
-                        .join(".config/cognilite/behaviours");
-                    b.extend(crate::behaviour::load_from_dir(&global));
+                        .join(".config/cognilite/neurons");
+                    n.extend(crate::synapse::load_from_dir(&global));
                 }
-                b
+                n
             },
-            tool_context: String::new(), // built after behaviours are loaded, in select_model
+            tool_context: String::new(), // built after synapses are loaded, in select_model
             should_quit: false,
+            show_help: false,
+            help_scroll: 0,
         }
     }
 
@@ -146,7 +151,7 @@ impl App {
             let name = entry.name.clone();
             self.selected_model = Some(name.clone());
             self.context_length = crate::ollama::fetch_context_length(&self.base_url, &name);
-            self.tool_context = crate::behaviour::build_tool_context(&self.behaviours);
+            self.tool_context = crate::synapse::build_tool_context(&self.neurons);
             self.used_tokens = 0;
             self.messages.clear();
             self.input.clear();
@@ -178,6 +183,7 @@ impl App {
             attachments,
             thinking: String::new(),
             stats: None,
+            tool_call: None,
         });
         self.auto_scroll = true;
         self.start_stream();
@@ -194,6 +200,7 @@ impl App {
             attachments: vec![],
             thinking: String::new(),
             stats: None,
+            tool_call: None,
         });
 
         let model = self.selected_model.clone().unwrap();
@@ -266,12 +273,23 @@ impl App {
                             if last.role == Role::Assistant {
                                 if let Some(call) = extract_tool_call(&last.content) {
                                     let call = call.to_string();
-                                    // strip <tool>...</tool> from display
+                                    // strip <tool>...</tool> from the display content only.
+                                    // llm_content keeps the <tool> tag so the model can see
+                                    // its own tool calls in the conversation history — without
+                                    // this, the model loses context and loops forever.
+                                    // must find <tool> AFTER </think> to avoid truncating
+                                    // inside a thinking block.
                                     if let Some(last) = self.messages.last_mut() {
-                                        if let Some(pos) = last.content.find("<tool>") {
+                                        let tool_pos = match last.content.rfind("</think>") {
+                                            Some(i) => last.content[i + 8..]
+                                                .find("<tool>")
+                                                .map(|p| i + 8 + p),
+                                            None => last.content.find("<tool>"),
+                                        };
+                                        if let Some(pos) = tool_pos {
                                             last.content.truncate(pos);
                                             last.content = last.content.trim_end().to_string();
-                                            last.llm_content = last.content.clone();
+                                            // llm_content intentionally NOT updated here
                                         }
                                     }
                                     // stop current stream
@@ -344,27 +362,44 @@ impl App {
         self.completion = None;
     }
 
-    // --- behaviour execution ---
+    // --- synapse execution ---
 
     fn handle_tool_call(&mut self, call: &str) {
         let call = call.trim();
         let (cmd, args) = call.split_once(' ').unwrap_or((call, ""));
         let args = args.trim().trim_start_matches('@');
 
-        let result = match self.behaviours.iter().find(|b| b.trigger == cmd) {
-            Some(b) => match &b.kind {
-                crate::behaviour::BehaviourKind::Tool { action, .. } => match action.as_str() {
-                    "cat" => tool_cat(args, &self.working_dir),
-                    _     => format!("unknown tool action: {action}"),
-                },
-            },
-            None => format!("unknown tool: {cmd}"),
+        // search across all neurons for a matching behaviour
+        let found = self.neurons.iter().find_map(|n| {
+            n.synapses.iter().find(|s| s.trigger == cmd).map(|s| (n.name.clone(), s.clone()))
+        });
+
+        // fall back to shell passthrough if no specific behaviour matched
+        let shell_neuron = if found.is_none() {
+            self.neurons.iter().find(|n| n.shell)
+        } else {
+            None
         };
+
+        let result = if let Some((_, b)) = &found {
+            let crate::synapse::SynapseKind::Tool { command, .. } = &b.kind;
+            execute_command(command, args, &self.working_dir)
+        } else if shell_neuron.is_some() {
+            execute_command(cmd, args, &self.working_dir)
+        } else {
+            format!("unknown tool: {cmd}")
+        };
+
+        let tool_label = found
+            .as_ref()
+            .map(|(neuron_name, b)| format!("{} \u{203a} {}", neuron_name, b.trigger))
+            .or_else(|| shell_neuron.map(|n| format!("{} \u{203a} {}", n.name, cmd)))
+            .unwrap_or_else(|| cmd.to_string());
 
         let filename = Path::new(args)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| args.to_string());
+            .unwrap_or_else(|| if args.is_empty() { ".".to_string() } else { args.to_string() });
         let size = result.len();
         let llm_content = format!("Tool result:\n{result}");
 
@@ -380,6 +415,7 @@ impl App {
             }],
             thinking: String::new(),
             stats: None,
+            tool_call: Some(tool_label),
         });
         self.auto_scroll = true;
         self.start_stream();
@@ -387,6 +423,97 @@ impl App {
 
 
     // --- input editing helpers ---
+
+    pub fn input_kill_to_end(&mut self) {
+        // Ctrl+K: delete from cursor to end of current line
+        let byte = self.char_to_byte(self.cursor_pos);
+        let after = &self.input[byte..];
+        let to_nl = after.find('\n').unwrap_or(after.len());
+        self.input.drain(byte..byte + to_nl);
+    }
+
+    pub fn input_kill_to_start(&mut self) {
+        // Ctrl+U: delete from start of current line to cursor
+        let byte = self.char_to_byte(self.cursor_pos);
+        let before = &self.input[..byte];
+        let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let removed_chars = self.input[line_start..byte].chars().count();
+        self.input.drain(line_start..byte);
+        self.cursor_pos -= removed_chars;
+        self.completion = None;
+    }
+
+    pub fn input_delete_word_before(&mut self) {
+        // Ctrl+W: delete the word (and whitespace) immediately before the cursor
+        if self.cursor_pos == 0 {
+            return;
+        }
+        let end_byte = self.char_to_byte(self.cursor_pos);
+        // skip trailing spaces
+        let mut i = end_byte;
+        while i > 0 {
+            let c = self.input[..i].chars().next_back().unwrap();
+            if c == '\n' { break; }
+            if c != ' ' { break; }
+            i -= c.len_utf8();
+        }
+        // skip word chars
+        while i > 0 {
+            let c = self.input[..i].chars().next_back().unwrap();
+            if c == ' ' || c == '\n' { break; }
+            i -= c.len_utf8();
+        }
+        let removed_chars = self.input[i..end_byte].chars().count();
+        self.input.drain(i..end_byte);
+        self.cursor_pos -= removed_chars;
+        self.completion = None;
+    }
+
+    pub fn input_move_word_left(&mut self) {
+        // Alt+Left / Ctrl+Left: jump to start of previous word
+        if self.cursor_pos == 0 {
+            return;
+        }
+        let byte = self.char_to_byte(self.cursor_pos);
+        let mut i = byte;
+        // skip spaces
+        while i > 0 {
+            let c = self.input[..i].chars().next_back().unwrap();
+            if c != ' ' && c != '\n' { break; }
+            i -= c.len_utf8();
+            self.cursor_pos -= 1;
+        }
+        // skip word
+        while i > 0 {
+            let c = self.input[..i].chars().next_back().unwrap();
+            if c == ' ' || c == '\n' { break; }
+            i -= c.len_utf8();
+            self.cursor_pos -= 1;
+        }
+    }
+
+    pub fn input_move_word_right(&mut self) {
+        // Alt+Right / Ctrl+Right: jump to end of next word
+        let total = self.input.chars().count();
+        if self.cursor_pos >= total {
+            return;
+        }
+        let mut byte = self.char_to_byte(self.cursor_pos);
+        // skip spaces
+        while self.cursor_pos < total {
+            let c = self.input[byte..].chars().next().unwrap();
+            if c != ' ' && c != '\n' { break; }
+            byte += c.len_utf8();
+            self.cursor_pos += 1;
+        }
+        // skip word
+        while self.cursor_pos < total {
+            let c = self.input[byte..].chars().next().unwrap();
+            if c == ' ' || c == '\n' { break; }
+            byte += c.len_utf8();
+            self.cursor_pos += 1;
+        }
+    }
 
     pub fn input_insert(&mut self, c: char) {
         let idx = self.char_to_byte(self.cursor_pos);
@@ -568,21 +695,58 @@ impl App {
 
 // ── tool execution ────────────────────────────────────────────────────────────
 
-/// Returns the content between `<tool>` and `</tool>` if both tags are present.
+/// Returns the content between `<tool>` and `</tool>` if both tags are present,
+/// ignoring anything inside `<think>...</think>` blocks (model reasoning).
 fn extract_tool_call(content: &str) -> Option<&str> {
-    let start = content.find("<tool>")? + 6;
-    let end   = content.find("</tool>")?;
-    if end >= start { Some(&content[start..end]) } else { None }
+    // if a <think> block is open but not yet closed, we're still inside reasoning — skip
+    let scan = match content.rfind("</think>") {
+        Some(i) => &content[i + 8..],  // only look after the closing think tag
+        None => {
+            if content.contains("<think>") {
+                return None;            // still inside an open <think> block
+            }
+            content
+        }
+    };
+    let start = scan.find("<tool>")? + 6;
+    let end   = scan.find("</tool>")?;
+    if end >= start { Some(&scan[start..end]) } else { None }
 }
 
-fn tool_cat(args: &str, working_dir: &Path) -> String {
-    if args.is_empty() {
-        return "usage: cat <path>".to_string();
+/// Executes a command via `sh -c` so the full shell syntax is supported:
+/// quotes, spaces, redirections, pipes, etc.
+/// `command` may include fixed flags (e.g. "grep -rn").
+/// `args` are appended after the fixed command string.
+/// Runs with `working_dir` as the current directory.
+fn execute_command(command: &str, args: &str, working_dir: &Path) -> String {
+    if command.is_empty() {
+        return "error: empty command".to_string();
     }
-    let path = resolve_path(args, working_dir);
-    match std::fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(e)      => format!("error: {e}"),
+    let full = if args.is_empty() {
+        command.to_string()
+    } else {
+        format!("{command} {args}")
+    };
+
+    match std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&full)
+        .current_dir(working_dir)
+        .output()
+    {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !out.status.success() {
+                let msg = if !stderr.is_empty() { stderr } else { stdout };
+                format!("error: {msg}")
+            } else if stdout.is_empty() {
+                "Done.".to_string()
+            } else {
+                stdout.into_owned()
+            }
+        }
+        Err(e) => format!("error: {e}"),
     }
 }
 

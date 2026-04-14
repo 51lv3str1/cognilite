@@ -163,7 +163,9 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
-    let input_height = (app.input_line_count() as u16 + 2).min(10); // borders + lines, max 10
+    // +2 for borders; account for visual wrapping (area.width - 4 = borders(2) + prefix(2))
+    let input_inner_width = area.width.saturating_sub(4);
+    let input_height = (visual_line_count(&app.input, input_inner_width) + 2).min(10);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -270,8 +272,9 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                     } else {
                         format!("{} B", att.size)
                     };
+                    let label = msg.tool_call.as_deref().unwrap_or("tool");
                     lines.push(Line::from(vec![
-                        Span::styled("  ⚙ cat  ", Style::default().fg(DIM)),
+                        Span::styled(format!("  ⚙ {label}  "), Style::default().fg(DIM)),
                         Span::styled(att.filename.clone(), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
                         Span::styled(format!("  {size_str}"), Style::default().fg(DIM)),
                     ]));
@@ -285,11 +288,21 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 }
             }
             Role::Assistant => {
+                let is_last = std::ptr::eq(msg, app.messages.last().unwrap());
+                let streaming = is_last && app.stream_state == StreamState::Streaming;
+
+                // intermediate assistant messages that only held a tool call
+                // have empty content — skip them entirely, the Tool result below tells the story
+                if msg.content.is_empty() && msg.thinking.is_empty() && !streaming {
+                    continue;
+                }
+
                 lines.push(Line::from(Span::styled(
                     "Assistant",
                     Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD),
                 )));
                 if msg.content.is_empty() && msg.thinking.is_empty() {
+                    // only the current streaming message reaches here
                     let label = match app.stream_started_at {
                         Some(started) => format!(
                             "  Processing… {}▋",
@@ -299,8 +312,6 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                     };
                     lines.push(Line::from(Span::styled(label, Style::default().fg(DIM))));
                 } else {
-                    let is_last = std::ptr::eq(msg, app.messages.last().unwrap());
-                    let streaming = is_last && app.stream_state == StreamState::Streaming;
                     let thought_secs = msg.stats.as_ref().map(|s| s.duration_secs);
                     render_assistant_content(&mut lines, &msg.thinking, &msg.content, inner_width, streaming, thought_secs);
                 }
@@ -411,48 +422,51 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         Paragraph::new(Line::from(Span::styled("Waiting for response…", Style::default().fg(DIM))))
             .block(input_block)
     } else {
-        // build lines: first line has "> " prefix, rest are indented with "  "
-        let input_lines: Vec<&str> = app.input.split('\n').collect();
-        let mut text_lines: Vec<Line> = input_lines
-            .iter()
-            .enumerate()
-            .map(|(i, l)| {
-                let prefix = if i == 0 {
-                    Span::styled("> ", Style::default().fg(ACCENT))
-                } else {
-                    Span::styled("  ", Style::default().fg(ACCENT))
-                };
-                let mut spans = vec![prefix];
-                spans.extend(highlight_at_refs(l));
-                Line::from(spans)
-            })
-            .collect();
+        // Build visual lines: each logical line (split by \n) is chunked into
+        // slices of input_inner_width so long lines wrap rather than getting clipped.
+        let w = (input_inner_width as usize).max(1);
+        let mut text_lines: Vec<Line> = Vec::new();
+        let mut first = true;
+        for logical_line in app.input.split('\n') {
+            let chars: Vec<char> = logical_line.chars().collect();
+            if chars.is_empty() {
+                let prefix = if first { Span::styled("> ", Style::default().fg(ACCENT)) }
+                             else     { Span::styled("  ", Style::default().fg(ACCENT)) };
+                text_lines.push(Line::from(vec![prefix]));
+                first = false;
+            } else {
+                for chunk in chars.chunks(w) {
+                    let s: String = chunk.iter().collect();
+                    let prefix = if first { Span::styled("> ", Style::default().fg(ACCENT)) }
+                                 else     { Span::styled("  ", Style::default().fg(ACCENT)) };
+                    let mut spans = vec![prefix];
+                    spans.extend(highlight_at_refs(&s));
+                    text_lines.push(Line::from(spans));
+                    first = false;
+                }
+            }
+        }
 
-        // scroll input view so cursor row is always visible
-        let (cur_row, _) = app.cursor_row_col();
+        // scroll so cursor visual row is always visible
+        let (vcur_row, _) = input_visual_cursor(&app.input, app.cursor_pos, input_inner_width);
         let visible_rows = (input_height - 2) as usize;
-        let input_scroll = if cur_row >= visible_rows {
-            (cur_row + 1 - visible_rows) as u16
-        } else {
-            0
-        };
-        // truncate rendered lines to avoid ratatui scroll issues — just show the visible slice
+        let input_scroll = vcur_row.saturating_sub(visible_rows.saturating_sub(1));
         if input_scroll > 0 {
-            text_lines = text_lines.into_iter().skip(input_scroll as usize).collect();
+            text_lines = text_lines.into_iter().skip(input_scroll).collect();
         }
 
         Paragraph::new(Text::from(text_lines)).block(input_block)
     };
     frame.render_widget(input_widget, chunks[2]);
 
-    // place cursor in 2D
+    // place cursor in 2D using visual coordinates
     if app.stream_state != StreamState::Streaming {
-        let (cur_row, cur_col) = app.cursor_row_col();
+        let (vcur_row, vcur_col) = input_visual_cursor(&app.input, app.cursor_pos, input_inner_width);
         let visible_rows = (input_height - 2) as usize;
-        let input_scroll = cur_row.saturating_sub(visible_rows.saturating_sub(1));
-        let visual_row = cur_row - input_scroll;
+        let input_scroll = vcur_row.saturating_sub(visible_rows.saturating_sub(1));
+        let visual_row = vcur_row - input_scroll;
         let prefix_len: u16 = 2; // "> " or "  "
-        let x = chunks[2].x + 1 + prefix_len + cur_col as u16;
+        let x = chunks[2].x + 1 + prefix_len + vcur_col as u16;
         let y = chunks[2].y + 1 + visual_row as u16;
         frame.set_cursor_position((x.min(chunks[2].x + chunks[2].width - 2), y));
     }
@@ -469,20 +483,17 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         Span::raw("  "),
         hint("Ctrl+N", "newline"),
         Span::raw("  "),
-        hint("Ctrl+L", "clear"),
-        Span::raw("  "),
-        hint("Alt+↑/↓", "scroll"),
-        Span::raw("  "),
-        hint("End", "↓bottom"),
-        Span::raw("  "),
-        hint("@path", "attach"),
-        Span::raw("  "),
         hint("Esc", esc_label),
         Span::raw("  "),
-        hint("Ctrl+C", "quit"),
+        hint("F1", "help"),
     ]))
     .style(Style::default().fg(DIM));
     frame.render_widget(hints, chunks[3]);
+
+    // --- help popup ---
+    if app.show_help {
+        draw_help_popup(frame, app, area);
+    }
 }
 
 fn draw_completion_popup(frame: &mut Frame, app: &App, input_area: Rect) {
@@ -572,6 +583,95 @@ fn draw_completion_popup(frame: &mut Frame, app: &App, input_area: Rect) {
     frame.render_widget(List::new(items).block(block), popup_rect);
 }
 
+fn draw_help_popup(frame: &mut Frame, app: &App, area: Rect) {
+    const SECTIONS: &[(&str, &[(&str, &str)])] = &[
+        ("Sending", &[
+            ("Enter",        "Send message"),
+            ("Ctrl+N",       "Insert newline"),
+            ("Esc",          "Stop stream / back to model select"),
+        ]),
+        ("Cursor movement", &[
+            ("←  →",         "Move one character"),
+            ("Ctrl+←  →",    "Move one word"),
+            ("Ctrl+A",       "Beginning of line"),
+            ("Ctrl+E",       "End of line"),
+            ("Home / End",   "Beginning / end of line"),
+            ("↑  ↓",         "Move between lines (multi-line input)"),
+        ]),
+        ("Editing", &[
+            ("Backspace",    "Delete character before cursor"),
+            ("Delete",       "Delete character after cursor"),
+            ("Ctrl+W",       "Delete word before cursor"),
+            ("Ctrl+K",       "Delete to end of line"),
+            ("Ctrl+U",       "Delete to beginning of line"),
+        ]),
+        ("Scrolling", &[
+            ("Alt+↑  ↓",     "Scroll messages"),
+            ("PageUp / PageDown", "Scroll messages (fast)"),
+            ("Ctrl+End",     "Jump to bottom"),
+        ]),
+        ("Chat", &[
+            ("Ctrl+L",       "Clear conversation"),
+            ("@path",        "Attach a file or image"),
+            ("Ctrl+C",       "Quit"),
+            ("F1",           "Toggle this help"),
+        ]),
+    ];
+
+    // build lines
+    let mut lines: Vec<Line> = vec![Line::raw("")];
+    for (section, entries) in SECTIONS {
+        lines.push(Line::from(Span::styled(
+            format!("  {section}"),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )));
+        for (key, desc) in *entries {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {key:<22}", key = key), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(desc.to_string(), Style::default().fg(DIM)),
+            ]));
+        }
+        lines.push(Line::raw(""));
+    }
+
+    let popup_w = 58u16.min(area.width.saturating_sub(4));
+    let popup_h = 24u16.min(area.height.saturating_sub(4));
+    let popup_rect = Rect {
+        x: area.x + (area.width.saturating_sub(popup_w)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_h)) / 2,
+        width: popup_w,
+        height: popup_h,
+    };
+
+    let total_lines = lines.len() as u16;
+    let visible = popup_h.saturating_sub(2);
+    let max_scroll = total_lines.saturating_sub(visible);
+    let scroll = app.help_scroll.min(max_scroll);
+
+    let scroll_hint = if total_lines > visible {
+        format!(" {}/{} ", scroll + 1, total_lines)
+    } else {
+        String::new()
+    };
+
+    let block = Block::default()
+        .title(Span::styled(" Keyboard shortcuts ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+        .title_bottom(Span::styled(
+            format!("{scroll_hint}  [F1/Esc] close  [↑↓] scroll"),
+            Style::default().fg(DIM),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(BG));
+
+    frame.render_widget(Clear, popup_rect);
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).block(block).scroll((scroll, 0)),
+        popup_rect,
+    );
+}
+
 /// Returns the display name for a completion candidate.
 /// For bare names (no slash in the middle) returns as-is.
 /// For paths like "src/app.rs" returns just "app.rs" (with dir dimmed separately).
@@ -584,6 +684,42 @@ fn display_name(candidate: &str) -> String {
     } else {
         format!("{c}{suffix}")
     }
+}
+
+/// Returns the visual (row, col) of `cursor_pos` within `input`,
+/// accounting for both explicit newlines and wrap at `width` columns.
+fn input_visual_cursor(input: &str, cursor_pos: usize, width: u16) -> (usize, usize) {
+    let w = if width == 0 { return (0, 0); } else { width as usize };
+    let byte = input.char_indices().nth(cursor_pos).map(|(b, _)| b).unwrap_or(input.len());
+    let before = &input[..byte];
+    let logical_lines: Vec<&str> = before.split('\n').collect();
+    let last = logical_lines.last().copied().unwrap_or("");
+    let mut vrow = 0usize;
+    for line in &logical_lines[..logical_lines.len().saturating_sub(1)] {
+        let len = line.chars().count();
+        vrow += if len == 0 { 1 } else { (len + w - 1) / w };
+    }
+    let last_len = last.chars().count();
+    vrow += last_len / w;
+    let vcol = last_len % w;
+    (vrow, vcol)
+}
+
+/// Counts how many terminal rows the input string will occupy given a fixed column width,
+/// accounting for both explicit newlines and visual word-wrap.
+fn visual_line_count(input: &str, width: u16) -> u16 {
+    if width == 0 {
+        return 1;
+    }
+    let w = width as usize;
+    input
+        .split('\n')
+        .map(|line| {
+            let len = line.chars().count();
+            if len == 0 { 1u16 } else { ((len + w - 1) / w) as u16 }
+        })
+        .sum::<u16>()
+        .max(1)
 }
 
 fn hint<'a>(key: &'a str, desc: &'a str) -> Span<'a> {

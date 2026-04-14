@@ -1,11 +1,11 @@
 mod app;
-mod behaviour;
+mod synapse;
 mod events;
 mod ollama;
 mod ui;
 
 use std::time::Duration;
-use crossterm::event::{self, Event};
+use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use color_eyre::Result;
 use app::App;
 
@@ -14,9 +14,12 @@ const OLLAMA_BASE_URL: &str = "http://localhost:11434";
 fn main() -> Result<()> {
     color_eyre::install()?;
     ratatui::run(|terminal| {
+        crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
         let mut app = App::new(OLLAMA_BASE_URL.to_string());
         load_models(&mut app);
-        run_loop(terminal, &mut app)
+        let result = run_loop(terminal, &mut app);
+        let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+        result
     })?;
     Ok(())
 }
@@ -48,6 +51,7 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> color_eyr
         if event::poll(timeout)? {
             match event::read()? {
                 Event::Key(key) => events::handle_key(app, key),
+                Event::Paste(text) => events::handle_paste(app, &text),
                 Event::Resize(_, _) => {}
                 _ => {}
             }

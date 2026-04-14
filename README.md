@@ -4,7 +4,7 @@ Lightweight terminal UI for chatting with local [Ollama](https://ollama.com) mod
 Built in Rust with [ratatui](https://ratatui.rs). No async runtime, no heavy dependencies — single ~2.5 MB binary.
 
 ```
-cognilite  ›  gemma4:e2b ●  ctx 12% / 128k
+cognilite  >  gemma4:e2b  *  ctx 12% / 128k
 ╭──────────────────────────────────────────────────────────╮
 │                                                          │
 │ You                                                      │
@@ -13,14 +13,14 @@ cognilite  ›  gemma4:e2b ●  ctx 12% / 128k
 │ Assistant                                                │
 │   Let me check.                                          │
 │                                                          │
-│  ⚙ Terminal › cat  app.rs  18.4 KB                      │
-│  ▎ pub struct App {                                      │
-│  ▎     pub screen: Screen,                               │
-│  ▎ ...                                                   │
+│  * Terminal > cat  app.rs  18.4 KB                       │
+│  | pub struct App {                                      │
+│  |     pub screen: Screen,                               │
+│  | ...                                                   │
 │                                                          │
-│   app.rs holds all application state. The App struct    │
+│   app.rs holds all application state. The App struct     │
 │   contains the message history, input buffer...          │
-│   1.2 tok/s  ·  87 tokens  ·  4096 prompt  ·  72.1s    │
+│   1.2 tok/s  -  87 tokens  -  4096 prompt  -  72.1s      │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────╮

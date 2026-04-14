@@ -1,0 +1,976 @@
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+};
+use crate::app::{App, Role, Screen, StreamState};
+
+const ACCENT: Color = Color::Rgb(137, 180, 250);  // blue
+const USER_COLOR: Color = Color::Rgb(166, 227, 161); // green
+const ASSISTANT_COLOR: Color = Color::Rgb(203, 166, 247); // purple
+const DIM: Color = Color::Rgb(108, 112, 134);
+const THINKING_COLOR: Color = Color::Rgb(73, 77, 100); // dark muted — thinking blocks
+const ERROR_COLOR: Color = Color::Rgb(243, 139, 168);
+const BG: Color = Color::Rgb(30, 30, 46);
+const SURFACE: Color = Color::Rgb(49, 50, 68);
+const CODE_FG: Color = Color::Rgb(205, 214, 244);  // bright — code text
+const CODE_BORDER: Color = Color::Rgb(88, 91, 112); // dim — left gutter bar
+
+pub fn draw(frame: &mut Frame, app: &mut App) {
+    match app.screen {
+        Screen::ModelSelect => draw_model_select(frame, app),
+        Screen::Chat => draw_chat(frame, app),
+    }
+}
+
+fn draw_model_select(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BG)),
+        area,
+    );
+
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(3),
+            Constraint::Length(app.models.len().max(3).min(20) as u16 + 2),
+            Constraint::Length(2),
+            Constraint::Fill(1),
+        ])
+        .split(area);
+
+    let horiz = |row: Rect| {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Fill(1), Constraint::Max(52), Constraint::Fill(1)])
+            .split(row)[1]
+    };
+
+    // title
+    let title = Paragraph::new(Line::from(vec![
+        Span::styled("cogni", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled("lite", Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
+        Span::styled("  ·  ollama TUI", Style::default().fg(DIM)),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(SURFACE)));
+    frame.render_widget(title, horiz(vert[1]));
+
+    // model list
+    let block = Block::default()
+        .title(Span::styled(" Select model ", Style::default().fg(ACCENT)))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(BG));
+
+    let list_area = horiz(vert[2]);
+
+    if app.loading_models {
+        let p = Paragraph::new("Loading models…")
+            .style(Style::default().fg(DIM))
+            .block(block);
+        frame.render_widget(p, list_area);
+    } else if let Some(ref err) = app.models_error {
+        let p = Paragraph::new(err.as_str())
+            .style(Style::default().fg(ERROR_COLOR))
+            .wrap(Wrap { trim: true })
+            .block(block);
+        frame.render_widget(p, list_area);
+    } else if app.models.is_empty() {
+        let p = Paragraph::new("No models found. Pull one with:\n  ollama pull llama3.2:1b")
+            .style(Style::default().fg(DIM))
+            .wrap(Wrap { trim: true })
+            .block(block);
+        frame.render_widget(p, list_area);
+    } else {
+        // column widths based on actual available area
+        // layout: [2 left][name_w][2 gap][META_W][2 right] inside 1-char borders each side
+        // meta layout: [{:>8}  {:>7}  {:>7}] = 8+2+7+2+7 = 26
+        const META_W: usize = 26;
+        const LEFT_PAD: usize = 2;
+        const GAP: usize = 2;
+        const RIGHT_PAD: usize = 2;
+        let inner = list_area.width.saturating_sub(2) as usize; // subtract left+right borders
+        let name_w = inner.saturating_sub(LEFT_PAD + GAP + META_W + RIGHT_PAD);
+
+        let items: Vec<ListItem> = app
+            .models
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let selected = i == app.model_cursor;
+
+                // truncate name if needed
+                let name_chars: Vec<char> = entry.name.chars().collect();
+                let name_col = if name_chars.len() > name_w {
+                    let truncated: String = name_chars[..name_w.saturating_sub(1)].iter().collect();
+                    format!("{truncated}…")
+                } else {
+                    format!("{:<width$}", entry.name, width = name_w)
+                };
+
+                // each metadata sub-column has a fixed width so they align across rows
+                let param = entry.parameter_size.as_deref().unwrap_or("");
+                let quant = entry.quantization_level.as_deref().unwrap_or("");
+                let size  = entry.size_bytes.map(format_bytes).unwrap_or_default();
+                let meta_col = format!("{:>8}  {:>7}  {:>7}", param, quant, size);
+
+                if selected {
+                    ListItem::new(Line::from(vec![
+                        Span::styled("  ", Style::default().bg(ACCENT)),
+                        Span::styled(name_col, Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)),
+                        Span::styled("  ", Style::default().bg(ACCENT)),
+                        Span::styled(meta_col, Style::default().fg(BG).bg(ACCENT)),
+                        Span::styled("  ", Style::default().bg(ACCENT)),
+                    ]))
+                } else {
+                    ListItem::new(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(name_col, Style::default().fg(Color::White)),
+                        Span::raw("  "),
+                        Span::styled(meta_col, Style::default().fg(DIM)),
+                        Span::raw("  "),
+                    ]))
+                }
+            })
+            .collect();
+
+        let mut state = ListState::default().with_selected(Some(app.model_cursor));
+        frame.render_stateful_widget(
+            List::new(items).block(block).highlight_style(Style::default()),
+            list_area,
+            &mut state,
+        );
+    }
+
+    // hints
+    let hints = Paragraph::new(Line::from(vec![
+        hint("↑/↓", "navigate"),
+        Span::raw("  "),
+        hint("Enter", "select"),
+        Span::raw("  "),
+        hint("Ctrl+C", "quit"),
+    ]))
+    .style(Style::default().fg(DIM));
+    frame.render_widget(hints, horiz(vert[3]));
+}
+
+fn draw_chat(frame: &mut Frame, app: &mut App) {
+    let area = frame.area();
+    frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
+
+    let input_height = (app.input_line_count() as u16 + 2).min(10); // borders + lines, max 10
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),              // header
+            Constraint::Fill(1),                // messages
+            Constraint::Length(input_height),   // input (dynamic)
+            Constraint::Length(1),              // hints
+        ])
+        .split(area);
+
+    // --- header ---
+    let model_name = app.selected_model.as_deref().unwrap_or("unknown");
+    let stream_indicator = match &app.stream_state {
+        StreamState::Streaming => Span::styled(" ● ", Style::default().fg(USER_COLOR)),
+        StreamState::Error(_) => Span::styled(" ✗ ", Style::default().fg(ERROR_COLOR)),
+        StreamState::Idle => Span::styled(" ○ ", Style::default().fg(DIM)),
+    };
+    let mut header_spans = vec![
+        Span::styled("cognilite", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled("  ›  ", Style::default().fg(DIM)),
+        Span::styled(model_name, Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
+        stream_indicator,
+    ];
+
+    if let Some(ctx_len) = app.context_length {
+        if ctx_len > 0 {
+            let ctx_k = ctx_len / 1000;
+            if app.used_tokens > 0 {
+                let pct = (app.used_tokens as f64 / ctx_len as f64 * 100.0) as u64;
+                let color = if pct < 50 {
+                    USER_COLOR
+                } else if pct < 80 {
+                    Color::Rgb(249, 226, 175)
+                } else {
+                    ERROR_COLOR
+                };
+                header_spans.push(Span::styled(
+                    format!("  ctx {pct}% / {ctx_k}k"),
+                    Style::default().fg(color),
+                ));
+            } else {
+                header_spans.push(Span::styled(
+                    format!("  ctx {ctx_k}k"),
+                    Style::default().fg(DIM),
+                ));
+            }
+        }
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(header_spans)), chunks[0]);
+
+    // --- messages ---
+    let msg_area = chunks[1];
+    let inner_width = msg_area.width.saturating_sub(4) as usize; // borders + padding
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::raw(""));
+
+    for msg in &app.messages {
+        match msg.role {
+            Role::User => {
+                lines.push(Line::from(Span::styled(
+                    "You",
+                    Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD),
+                )));
+                // show message text (with @refs stripped to just the filename)
+                let display = clean_at_refs(&msg.content);
+                for text_line in wrap_text(&display, inner_width) {
+                    if !text_line.trim().is_empty() {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {text_line}"),
+                            Style::default().fg(Color::White),
+                        )));
+                    }
+                }
+                // attachment pills
+                for att in &msg.attachments {
+                    let icon = match att.kind {
+                        crate::app::AttachmentKind::Text => "≡",
+                        crate::app::AttachmentKind::Image => "⬡",
+                    };
+                    let size_str = if att.size >= 1024 {
+                        format!("{:.1} KB", att.size as f64 / 1024.0)
+                    } else {
+                        format!("{} B", att.size)
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {icon} "), Style::default().fg(ACCENT)),
+                        Span::styled(att.filename.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("  {size_str}"), Style::default().fg(DIM)),
+                    ]));
+                }
+            }
+            Role::Tool => {
+                if msg.attachments.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ✗ ", Style::default().fg(ERROR_COLOR)),
+                        Span::styled(msg.content.clone(), Style::default().fg(ERROR_COLOR)),
+                    ]));
+                } else {
+                    let att = &msg.attachments[0];
+                    let size_str = if att.size >= 1024 {
+                        format!("{:.1} KB", att.size as f64 / 1024.0)
+                    } else {
+                        format!("{} B", att.size)
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled("  ⚙ cat  ", Style::default().fg(DIM)),
+                        Span::styled(att.filename.clone(), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("  {size_str}"), Style::default().fg(DIM)),
+                    ]));
+                    for code_line in msg.content.lines() {
+                        let truncated: String = code_line.chars().take(inner_width.saturating_sub(4)).collect();
+                        lines.push(Line::from(vec![
+                            Span::styled("  ▎ ", Style::default().fg(CODE_BORDER)),
+                            Span::styled(truncated, Style::default().fg(CODE_FG)),
+                        ]));
+                    }
+                }
+            }
+            Role::Assistant => {
+                lines.push(Line::from(Span::styled(
+                    "Assistant",
+                    Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD),
+                )));
+                if msg.content.is_empty() && msg.thinking.is_empty() {
+                    let label = match app.stream_started_at {
+                        Some(started) => format!(
+                            "  Processing… {}▋",
+                            format_duration(started.elapsed().as_secs_f64())
+                        ),
+                        None => "  ▋".to_string(),
+                    };
+                    lines.push(Line::from(Span::styled(label, Style::default().fg(DIM))));
+                } else {
+                    let is_last = std::ptr::eq(msg, app.messages.last().unwrap());
+                    let streaming = is_last && app.stream_state == StreamState::Streaming;
+                    let thought_secs = msg.stats.as_ref().map(|s| s.duration_secs);
+                    render_assistant_content(&mut lines, &msg.thinking, &msg.content, inner_width, streaming, thought_secs);
+                }
+                if let Some(ref s) = msg.stats {
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "  {} tok/s  ·  {} tokens  ·  {} prompt  ·  {}",
+                            format!("{:.1}", s.tokens_per_sec),
+                            s.response_tokens,
+                            s.prompt_tokens,
+                            format_duration(s.duration_secs),
+                        ),
+                        Style::default().fg(DIM),
+                    )));
+                }
+            }
+        }
+        lines.push(Line::raw(""));
+    }
+
+    if let StreamState::Error(ref e) = app.stream_state {
+        lines.push(Line::from(Span::styled(
+            format!("  Error: {e}"),
+            Style::default().fg(ERROR_COLOR),
+        )));
+        lines.push(Line::raw(""));
+    }
+
+    // context usage warnings
+    if let Some(ctx_len) = app.context_length {
+        if ctx_len > 0 && app.used_tokens > 0 {
+            let pct = app.used_tokens as f64 / ctx_len as f64 * 100.0;
+
+            if pct >= 100.0 {
+                lines.push(Line::from(vec![
+                    Span::styled("  ⚠ ", Style::default().fg(ERROR_COLOR).add_modifier(Modifier::BOLD)),
+                    Span::styled("Context window full. ", Style::default().fg(ERROR_COLOR).add_modifier(Modifier::BOLD)),
+                    Span::styled("The model can no longer respond.", Style::default().fg(ERROR_COLOR)),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    "  What you can do:",
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(vec![
+                    Span::styled("    [Ctrl+L]  ", Style::default().fg(ACCENT)),
+                    Span::styled("Clear chat and start fresh", Style::default().fg(Color::White)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("    [Esc]     ", Style::default().fg(ACCENT)),
+                    Span::styled("Go back and pick a model with a larger context", Style::default().fg(Color::White)),
+                ]));
+                lines.push(Line::raw(""));
+            } else if pct >= 90.0 {
+                lines.push(Line::from(vec![
+                    Span::styled("  ⚠ ", Style::default().fg(ERROR_COLOR)),
+                    Span::styled(
+                        format!("Context at {:.0}% — start a new conversation soon.", pct),
+                        Style::default().fg(ERROR_COLOR),
+                    ),
+                ]));
+                lines.push(Line::raw(""));
+            } else if pct >= 80.0 {
+                lines.push(Line::from(vec![
+                    Span::styled("  ⚠ ", Style::default().fg(Color::Rgb(249, 226, 175))),
+                    Span::styled(
+                        format!("Context at {:.0}%.", pct),
+                        Style::default().fg(Color::Rgb(249, 226, 175)),
+                    ),
+                ]));
+                lines.push(Line::raw(""));
+            }
+        }
+    }
+
+    let total_lines = lines.len() as u16;
+    app.content_lines = total_lines;
+
+    let visible_height = msg_area.height.saturating_sub(2);
+    if app.auto_scroll {
+        app.scroll = total_lines.saturating_sub(visible_height);
+    } else {
+        app.scroll = app.scroll.min(total_lines.saturating_sub(1));
+    }
+
+    let msg_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(SURFACE))
+        .style(Style::default().bg(BG));
+
+    let messages_widget = Paragraph::new(Text::from(lines))
+        .block(msg_block)
+        .scroll((app.scroll, 0));
+    frame.render_widget(messages_widget, msg_area);
+
+    // --- input ---
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if app.stream_state == StreamState::Streaming {
+            DIM
+        } else {
+            ACCENT
+        }))
+        .style(Style::default().bg(BG));
+
+    let input_widget = if app.input.is_empty() && app.stream_state == StreamState::Streaming {
+        Paragraph::new(Line::from(Span::styled("Waiting for response…", Style::default().fg(DIM))))
+            .block(input_block)
+    } else {
+        // build lines: first line has "> " prefix, rest are indented with "  "
+        let input_lines: Vec<&str> = app.input.split('\n').collect();
+        let mut text_lines: Vec<Line> = input_lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let prefix = if i == 0 {
+                    Span::styled("> ", Style::default().fg(ACCENT))
+                } else {
+                    Span::styled("  ", Style::default().fg(ACCENT))
+                };
+                let mut spans = vec![prefix];
+                spans.extend(highlight_at_refs(l));
+                Line::from(spans)
+            })
+            .collect();
+
+        // scroll input view so cursor row is always visible
+        let (cur_row, _) = app.cursor_row_col();
+        let visible_rows = (input_height - 2) as usize;
+        let input_scroll = if cur_row >= visible_rows {
+            (cur_row + 1 - visible_rows) as u16
+        } else {
+            0
+        };
+        // truncate rendered lines to avoid ratatui scroll issues — just show the visible slice
+        if input_scroll > 0 {
+            text_lines = text_lines.into_iter().skip(input_scroll as usize).collect();
+        }
+
+        Paragraph::new(Text::from(text_lines)).block(input_block)
+    };
+    frame.render_widget(input_widget, chunks[2]);
+
+    // place cursor in 2D
+    if app.stream_state != StreamState::Streaming {
+        let (cur_row, cur_col) = app.cursor_row_col();
+        let visible_rows = (input_height - 2) as usize;
+        let input_scroll = cur_row.saturating_sub(visible_rows.saturating_sub(1));
+        let visual_row = cur_row - input_scroll;
+        let prefix_len: u16 = 2; // "> " or "  "
+        let x = chunks[2].x + 1 + prefix_len + cur_col as u16;
+        let y = chunks[2].y + 1 + visual_row as u16;
+        frame.set_cursor_position((x.min(chunks[2].x + chunks[2].width - 2), y));
+    }
+
+    // --- completion popup ---
+    if app.completion.is_some() {
+        draw_completion_popup(frame, app, chunks[2]);
+    }
+
+    // --- hints ---
+    let esc_label = if app.stream_state == StreamState::Streaming { "stop" } else { "models" };
+    let hints = Paragraph::new(Line::from(vec![
+        hint("Enter", "send"),
+        Span::raw("  "),
+        hint("Ctrl+N", "newline"),
+        Span::raw("  "),
+        hint("Ctrl+L", "clear"),
+        Span::raw("  "),
+        hint("Alt+↑/↓", "scroll"),
+        Span::raw("  "),
+        hint("End", "↓bottom"),
+        Span::raw("  "),
+        hint("@path", "attach"),
+        Span::raw("  "),
+        hint("Esc", esc_label),
+        Span::raw("  "),
+        hint("Ctrl+C", "quit"),
+    ]))
+    .style(Style::default().fg(DIM));
+    frame.render_widget(hints, chunks[3]);
+}
+
+fn draw_completion_popup(frame: &mut Frame, app: &App, input_area: Rect) {
+    let comp = match &app.completion {
+        Some(c) => c,
+        None => return,
+    };
+
+    const MAX_VISIBLE: usize = 8;
+    let total = comp.candidates.len();
+    let visible = total.min(MAX_VISIBLE);
+
+    // scroll window so the selected item is always visible
+    let scroll = if comp.cursor >= visible {
+        comp.cursor + 1 - visible
+    } else {
+        0
+    };
+
+    // compute popup width from longest visible candidate
+    let max_name_len = comp.candidates[scroll..scroll + visible]
+        .iter()
+        .map(|s| display_name(s).chars().count())
+        .max()
+        .unwrap_or(10);
+    let popup_width = (max_name_len as u16 + 6).min(60).max(24).min(input_area.width);
+    let popup_height = visible as u16 + 2; // +2 for borders
+
+    // position: above the input box, left-aligned
+    let popup_y = input_area.y.saturating_sub(popup_height);
+    let popup_rect = Rect {
+        x: input_area.x,
+        y: popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    let items: Vec<ListItem> = comp.candidates[scroll..scroll + visible]
+        .iter()
+        .enumerate()
+        .map(|(i, candidate)| {
+            let global_idx = scroll + i;
+            let name = display_name(candidate);
+            let is_dir = candidate.ends_with('/');
+            let selected = global_idx == comp.cursor;
+
+            if selected {
+                ListItem::new(Line::from(vec![
+                    Span::styled(" ", Style::default().bg(ACCENT)),
+                    Span::styled(
+                        format!("{name} "),
+                        Style::default()
+                            .fg(BG)
+                            .bg(ACCENT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]))
+            } else if is_dir {
+                ListItem::new(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(name, Style::default().fg(ACCENT)),
+                ]))
+            } else {
+                ListItem::new(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(name, Style::default().fg(Color::White)),
+                ]))
+            }
+        })
+        .collect();
+
+    let scroll_hint = if total > MAX_VISIBLE {
+        format!(" {}/{} ", comp.cursor + 1, total)
+    } else {
+        String::new()
+    };
+
+    let block = Block::default()
+        .title(Span::styled(scroll_hint, Style::default().fg(DIM)))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(SURFACE));
+
+    // Clear the area first so the popup doesn't bleed through messages
+    frame.render_widget(Clear, popup_rect);
+    frame.render_widget(List::new(items).block(block), popup_rect);
+}
+
+/// Returns the display name for a completion candidate.
+/// For bare names (no slash in the middle) returns as-is.
+/// For paths like "src/app.rs" returns just "app.rs" (with dir dimmed separately).
+fn display_name(candidate: &str) -> String {
+    // strip trailing slash for directory label display
+    let c = candidate.trim_end_matches('/');
+    let suffix = if candidate.ends_with('/') { "/" } else { "" };
+    if let Some(slash) = c.rfind('/') {
+        format!("{}{suffix}", &c[slash + 1..])
+    } else {
+        format!("{c}{suffix}")
+    }
+}
+
+fn hint<'a>(key: &'a str, desc: &'a str) -> Span<'a> {
+    Span::raw(format!("[{key}] {desc}"))
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.0} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    }
+}
+
+fn format_duration(secs: f64) -> String {
+    if secs < 60.0 {
+        format!("{:.1}s", secs)
+    } else if secs < 3600.0 {
+        let m = secs as u64 / 60;
+        let s = secs as u64 % 60;
+        format!("{}m {}s", m, s)
+    } else {
+        let h = secs as u64 / 3600;
+        let m = (secs as u64 % 3600) / 60;
+        format!("{}h {}m", h, m)
+    }
+}
+
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut result = Vec::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            result.push(String::new());
+            continue;
+        }
+        let mut current = String::new();
+        let mut current_len = 0;
+        for word in line.split_whitespace() {
+            let word_len = word.chars().count();
+            if !current.is_empty() && current_len + 1 + word_len > width {
+                result.push(current.clone());
+                current.clear();
+                current_len = 0;
+            }
+            if !current.is_empty() {
+                current.push(' ');
+                current_len += 1;
+            }
+            current.push_str(word);
+            current_len += word_len;
+        }
+        if !current.is_empty() {
+            result.push(current);
+        }
+    }
+    if result.is_empty() {
+        result.push(String::new());
+    }
+    result
+}
+
+fn render_assistant_content(
+    lines: &mut Vec<Line>,
+    thinking: &str,
+    content: &str,
+    width: usize,
+    streaming: bool,
+    thought_secs: Option<f64>,
+) {
+    // thinking block (only present in models that support it)
+    if !thinking.is_empty() {
+        let label = if streaming && content.is_empty() {
+            "  thinking…".to_string()
+        } else if let Some(secs) = thought_secs {
+            format!("  thought for {}", format_duration(secs))
+        } else {
+            "  thinking…".to_string()
+        };
+        lines.push(Line::from(Span::styled(
+            label,
+            Style::default().fg(THINKING_COLOR).add_modifier(Modifier::ITALIC),
+        )));
+        for text_line in wrap_text(thinking.trim(), width) {
+            lines.push(Line::from(Span::styled(
+                format!("  {text_line}"),
+                Style::default().fg(THINKING_COLOR),
+            )));
+        }
+        // streaming cursor while still thinking (content not yet started)
+        if streaming && content.is_empty() {
+            if let Some(last) = lines.last_mut() {
+                last.spans.push(Span::styled("▋", Style::default().fg(THINKING_COLOR)));
+            }
+        }
+        lines.push(Line::raw(""));
+    }
+
+    // regular response content — split into text/code segments
+    if !content.is_empty() {
+        let segments = parse_content_segments(content.trim());
+        for seg in &segments {
+            match seg {
+                ContentSegment::Text(text) => {
+                    render_markdown_text(lines, text.trim_matches('\n'), width);
+                }
+                ContentSegment::Code { lang, content: code } => {
+                    lines.extend(render_code_block(lang, code, width));
+                }
+            }
+        }
+        if streaming {
+            if let Some(last) = lines.last_mut() {
+                last.spans.push(Span::styled("▋", Style::default().fg(DIM)));
+            }
+        }
+    } else if thinking.is_empty() {
+        lines.push(Line::from(Span::styled("  ▋", Style::default().fg(DIM))));
+    }
+}
+
+enum ContentSegment {
+    Text(String),
+    Code { lang: String, content: String },
+}
+
+fn parse_content_segments(content: &str) -> Vec<ContentSegment> {
+    let mut segments = Vec::new();
+    let mut rest = content;
+
+    while !rest.is_empty() {
+        match rest.find("```") {
+            Some(start) => {
+                if start > 0 {
+                    segments.push(ContentSegment::Text(rest[..start].to_string()));
+                }
+                rest = &rest[start + 3..];
+                let lang_end = rest.find('\n').unwrap_or(rest.len());
+                let lang = rest[..lang_end].trim().to_string();
+                rest = if lang_end < rest.len() { &rest[lang_end + 1..] } else { "" };
+
+                match rest.find("```") {
+                    Some(end) => {
+                        segments.push(ContentSegment::Code { lang, content: rest[..end].to_string() });
+                        rest = &rest[end + 3..];
+                        if rest.starts_with('\n') { rest = &rest[1..]; }
+                    }
+                    None => {
+                        // still streaming — unclosed block
+                        segments.push(ContentSegment::Code { lang, content: rest.to_string() });
+                        rest = "";
+                    }
+                }
+            }
+            None => {
+                segments.push(ContentSegment::Text(rest.to_string()));
+                rest = "";
+            }
+        }
+    }
+    segments
+}
+
+fn render_code_block(lang: &str, code: &str, width: usize) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    out.push(Line::raw(""));
+    let label = if lang.is_empty() { "code".to_string() } else { lang.to_string() };
+    out.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(label, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+    ]));
+    for code_line in code.trim_matches('\n').lines() {
+        let truncated: String = code_line.chars().take(width.saturating_sub(4)).collect();
+        out.push(Line::from(vec![
+            Span::styled("  ▎ ", Style::default().fg(CODE_BORDER)),
+            Span::styled(truncated, Style::default().fg(CODE_FG)),
+        ]));
+    }
+    out.push(Line::raw(""));
+    out
+}
+
+// Renders a markdown text block (non-code) line by line with inline formatting.
+fn render_markdown_text(lines: &mut Vec<Line>, text: &str, width: usize) {
+    for orig in text.split('\n') {
+        if orig.trim().is_empty() {
+            lines.push(Line::raw(""));
+            continue;
+        }
+
+        // headings
+        let (hashes, rest) = count_heading(orig);
+        if hashes > 0 {
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(inline_md(rest));
+            let line = Line::from(spans).style(
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            );
+            lines.push(line);
+            continue;
+        }
+
+        // list items: -, *, •, and numbered (1. 2.)
+        let (bullet, item_text) = detect_list_item(orig);
+        let indent = if bullet.is_some() { width.saturating_sub(4) } else { width };
+
+        let wrapped = wrap_text(item_text, indent);
+        for (i, chunk) in wrapped.iter().enumerate() {
+            let mut spans: Vec<Span> = Vec::new();
+            if i == 0 {
+                if let Some(ref b) = bullet {
+                    spans.push(Span::styled(b.clone(), Style::default().fg(ACCENT)));
+                } else {
+                    spans.push(Span::raw("  "));
+                }
+            } else {
+                // continuation indent
+                spans.push(Span::raw(if bullet.is_some() { "      " } else { "  " }));
+            }
+            spans.extend(inline_md(chunk));
+            lines.push(Line::from(spans));
+        }
+    }
+}
+
+fn count_heading(line: &str) -> (usize, &str) {
+    let n = line.chars().take_while(|&c| c == '#').count();
+    if n > 0 && n <= 3 && line[n..].starts_with(' ') {
+        (n, &line[n + 1..])
+    } else {
+        (0, line)
+    }
+}
+
+fn detect_list_item(line: &str) -> (Option<String>, &str) {
+    if line.starts_with("- ") || line.starts_with("* ") {
+        return (Some("  • ".to_string()), &line[2..]);
+    }
+    if line.starts_with("  - ") || line.starts_with("  * ") {
+        return (Some("    ◦ ".to_string()), &line[4..]);
+    }
+    // numbered: "1. ", "12. " etc.
+    let digits: String = line.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !digits.is_empty() {
+        let after = &line[digits.len()..];
+        if after.starts_with(". ") {
+            let num = format!("  {}. ", digits);
+            return (Some(num), &after[2..]);
+        }
+    }
+    (None, line)
+}
+
+// Replaces @/long/path/to/file.rs with @file.rs for cleaner display
+fn clean_at_refs(text: &str) -> String {
+    text.split(' ')
+        .map(|w| {
+            if w.starts_with('@') && w.len() > 1 {
+                let path = &w[1..];
+                let filename = std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(path);
+                format!("@{filename}")
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+// Returns spans with @path tokens highlighted in ACCENT color
+fn highlight_at_refs(text: &str) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    for word in text.split_inclusive(' ') {
+        let trimmed = word.trim_end();
+        if trimmed.starts_with('@') && trimmed.len() > 1 {
+            if !buf.is_empty() {
+                spans.push(Span::styled(buf.clone(), Style::default().fg(Color::White)));
+                buf.clear();
+            }
+            let space = if word.ends_with(' ') { " " } else { "" };
+            spans.push(Span::styled(
+                format!("{trimmed}{space}"),
+                Style::default().fg(ACCENT),
+            ));
+        } else {
+            buf.push_str(word);
+        }
+    }
+    if !buf.is_empty() {
+        spans.push(Span::styled(buf, Style::default().fg(Color::White)));
+    }
+    if spans.is_empty() {
+        spans.push(Span::raw(String::new()));
+    }
+    spans
+}
+
+// Parses inline markdown: **bold**, *italic*, `code`, __bold__, _italic_
+fn inline_md(text: &str) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    macro_rules! flush {
+        () => {
+            if !buf.is_empty() {
+                spans.push(Span::styled(buf.clone(), Style::default().fg(Color::White)));
+                buf.clear();
+            }
+        };
+    }
+
+    while i < chars.len() {
+        // **bold** or __bold__
+        if i + 1 < chars.len()
+            && ((chars[i] == '*' && chars[i + 1] == '*')
+                || (chars[i] == '_' && chars[i + 1] == '_'))
+        {
+            let marker = chars[i];
+            flush!();
+            i += 2;
+            let mut inner = String::new();
+            while i < chars.len() {
+                if i + 1 < chars.len() && chars[i] == marker && chars[i + 1] == marker {
+                    i += 2;
+                    break;
+                }
+                inner.push(chars[i]);
+                i += 1;
+            }
+            spans.push(Span::styled(
+                inner,
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ));
+            continue;
+        }
+
+        // *italic* or _italic_  (single)
+        if (chars[i] == '*' || chars[i] == '_')
+            && i + 1 < chars.len()
+            && chars[i + 1] != ' '
+        {
+            let marker = chars[i];
+            flush!();
+            i += 1;
+            let mut inner = String::new();
+            while i < chars.len() && chars[i] != marker {
+                inner.push(chars[i]);
+                i += 1;
+            }
+            if i < chars.len() { i += 1; }
+            spans.push(Span::styled(
+                inner,
+                Style::default().fg(Color::White).add_modifier(Modifier::ITALIC),
+            ));
+            continue;
+        }
+
+        // `inline code`
+        if chars[i] == '`' {
+            flush!();
+            i += 1;
+            let mut inner = String::new();
+            while i < chars.len() && chars[i] != '`' {
+                inner.push(chars[i]);
+                i += 1;
+            }
+            if i < chars.len() { i += 1; }
+            spans.push(Span::styled(inner, Style::default().fg(CODE_FG)));
+            continue;
+        }
+
+        buf.push(chars[i]);
+        i += 1;
+    }
+    flush!();
+    if spans.is_empty() {
+        spans.push(Span::raw(String::new()));
+    }
+    spans
+}

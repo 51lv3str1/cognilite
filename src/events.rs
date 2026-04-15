@@ -21,8 +21,23 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
     }
 
     match app.screen {
+        Screen::Config      => handle_config(app, key),
         Screen::ModelSelect => handle_model_select(app, key),
-        Screen::Chat => handle_chat(app, key),
+        Screen::Chat        => handle_chat(app, key),
+    }
+}
+
+fn handle_config(app: &mut App, key: KeyEvent) {
+    const OPTIONS: usize = 2;
+    match key.code {
+        KeyCode::Up   | KeyCode::Char('k') => {
+            if app.config_cursor > 0 { app.config_cursor -= 1; }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.config_cursor + 1 < OPTIONS { app.config_cursor += 1; }
+        }
+        KeyCode::Enter => app.confirm_config(),
+        _ => {}
     }
 }
 

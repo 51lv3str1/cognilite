@@ -4,8 +4,15 @@ use crate::ollama::{ChatMessage, ModelEntry, StreamChunk};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Screen {
+    Config,
     ModelSelect,
     Chat,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CtxStrategy {
+    Dynamic, // max(8192, used_tokens * 2) — faster, smaller KV cache
+    Full,    // model's max context length — slower but never truncates history
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +82,9 @@ pub struct App {
     pub screen: Screen,
     pub base_url: String,
     pub working_dir: PathBuf,
+    // config
+    pub ctx_strategy: CtxStrategy,
+    pub config_cursor: usize, // selected option index in config screen
     // model select
     pub models: Vec<ModelEntry>,
     pub model_cursor: usize,
@@ -110,9 +120,11 @@ pub struct App {
 impl App {
     pub fn new(base_url: String) -> Self {
         Self {
-            screen: Screen::ModelSelect,
+            screen: Screen::Config,
             base_url,
             working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            ctx_strategy: CtxStrategy::Dynamic,
+            config_cursor: 0,
             models: Vec::new(),
             model_cursor: 0,
             loading_models: true,
@@ -151,6 +163,14 @@ impl App {
             show_help: false,
             help_scroll: 0,
         }
+    }
+
+    pub fn confirm_config(&mut self) {
+        self.ctx_strategy = match self.config_cursor {
+            0 => CtxStrategy::Dynamic,
+            _ => CtxStrategy::Full,
+        };
+        self.screen = Screen::ModelSelect;
     }
 
     pub fn select_model(&mut self) {
@@ -221,13 +241,13 @@ impl App {
 
         let model = self.selected_model.clone().unwrap();
         let base_url = self.base_url.clone();
-        // Size num_ctx dynamically: 2× current usage with a 8k floor,
-        // capped at the model's max. Avoids pre-allocating a full 128k KV
-        // cache when the conversation only needs a fraction of it.
-        let num_ctx = self.context_length.map(|max| {
-            let needed = (self.used_tokens * 2).max(8192);
-            needed.min(max)
-        });
+        let num_ctx = match self.ctx_strategy {
+            CtxStrategy::Full => self.context_length,
+            CtxStrategy::Dynamic => self.context_length.map(|max| {
+                let needed = (self.used_tokens * 2).max(8192);
+                needed.min(max)
+            }),
+        };
 
         // prepend tool context as a system message if we have tools
         let mut chat_messages: Vec<ChatMessage> = Vec::new();

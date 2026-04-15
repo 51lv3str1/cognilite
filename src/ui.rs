@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
-use crate::app::{App, Role, Screen, StreamState};
+use crate::app::{App, CtxStrategy, Role, Screen, StreamState};
 
 const ACCENT: Color = Color::Rgb(137, 180, 250);  // blue
 const USER_COLOR: Color = Color::Rgb(166, 227, 161); // green
@@ -20,9 +20,116 @@ const CODE_BORDER: Color = Color::Rgb(88, 91, 112); // dim — left gutter bar
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     match app.screen {
+        Screen::Config      => draw_config(frame, app),
         Screen::ModelSelect => draw_model_select(frame, app),
-        Screen::Chat => draw_chat(frame, app),
+        Screen::Chat        => draw_chat(frame, app),
     }
+}
+
+fn draw_config(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
+
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(3),
+            Constraint::Length(8),
+            Constraint::Length(2),
+            Constraint::Fill(1),
+        ])
+        .split(area);
+
+    let horiz = |row: Rect| {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Fill(1), Constraint::Max(52), Constraint::Fill(1)])
+            .split(row)[1]
+    };
+
+    // title
+    let title = Paragraph::new(Line::from(vec![
+        Span::styled("cogni", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled("lite", Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
+        Span::styled("  ·  ollama TUI", Style::default().fg(DIM)),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(SURFACE)));
+    frame.render_widget(title, horiz(vert[1]));
+
+    struct Option<'a> { label: &'a str, desc: &'a str, strategy: CtxStrategy }
+    let options = [
+        Option {
+            label: "Dynamic context",
+            desc:  "Grows with the conversation. Faster, lower memory.",
+            strategy: CtxStrategy::Dynamic,
+        },
+        Option {
+            label: "Full context",
+            desc:  "Always uses the model's max window. Slower but never\ntruncates long histories.",
+            strategy: CtxStrategy::Full,
+        },
+    ];
+
+    let block = Block::default()
+        .title(Span::styled(" Context strategy ", Style::default().fg(ACCENT)))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(BG));
+
+    let inner = {
+        let b = horiz(vert[2]);
+        frame.render_widget(block, b);
+        Rect { x: b.x + 1, y: b.y + 1, width: b.width.saturating_sub(2), height: b.height.saturating_sub(2) }
+    };
+
+    let mut y = inner.y;
+    for (i, opt) in options.iter().enumerate() {
+        let selected = i == app.config_cursor;
+        let active   = opt.strategy == app.ctx_strategy;
+
+        let marker = if active { "●" } else { "○" };
+        let label_style = if selected {
+            Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let marker_style = if active {
+            Style::default().fg(ACCENT)
+        } else {
+            Style::default().fg(DIM)
+        };
+
+        let label_line = Line::from(vec![
+            Span::styled(format!("  {marker} "), if selected { Style::default().fg(BG).bg(ACCENT) } else { marker_style }),
+            Span::styled(opt.label, label_style),
+            if selected { Span::styled("  ", Style::default().bg(ACCENT)) } else { Span::raw("") },
+        ]);
+        frame.render_widget(Paragraph::new(label_line), Rect { x: inner.x, y, width: inner.width, height: 1 });
+        y += 1;
+
+        for desc_line in opt.desc.lines() {
+            let desc = Paragraph::new(Line::from(Span::styled(
+                format!("    {desc_line}"),
+                Style::default().fg(DIM),
+            )));
+            frame.render_widget(desc, Rect { x: inner.x, y, width: inner.width, height: 1 });
+            y += 1;
+        }
+        y += 1; // gap between options
+    }
+
+    // hints
+    let hints = Paragraph::new(Line::from(vec![
+        hint("↑/↓", "navigate"),
+        Span::raw("  "),
+        hint("Enter", "confirm"),
+        Span::raw("  "),
+        hint("Ctrl+C", "quit"),
+    ]))
+    .style(Style::default().fg(DIM));
+    frame.render_widget(hints, horiz(vert[3]));
 }
 
 fn draw_model_select(frame: &mut Frame, app: &App) {

@@ -36,7 +36,7 @@ fn handle_config(app: &mut App, key: KeyEvent) {
         KeyCode::Down | KeyCode::Char('j') => {
             if app.config_cursor + 1 < OPTIONS { app.config_cursor += 1; }
         }
-        KeyCode::Enter => { app.confirm_config(); app.toggle_config(); }
+        KeyCode::Enter => app.confirm_config(),
         KeyCode::Esc | KeyCode::Tab => app.toggle_config(),
         _ => {}
     }

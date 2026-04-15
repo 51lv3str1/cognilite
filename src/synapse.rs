@@ -93,9 +93,10 @@ pub fn load_from_dir(base: &Path) -> Vec<Neuron> {
 }
 
 /// Builds the system message injected at the start of every conversation.
-pub fn build_tool_context(neurons: &[Neuron]) -> String {
+pub fn build_tool_context(neurons: &[&Neuron]) -> String {
     let active: Vec<&Neuron> = neurons
         .iter()
+        .copied()
         .filter(|n| {
             n.shell
                 || !n.system_prompt.is_empty()

@@ -34,22 +34,37 @@ fn config_path() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config/cognilite/config.json"))
 }
 
-pub fn load_config() -> CtxStrategy {
-    let path = match config_path() { Some(p) => p, None => return CtxStrategy::Dynamic };
-    let Ok(text) = std::fs::read_to_string(&path) else { return CtxStrategy::Dynamic };
-    let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else { return CtxStrategy::Dynamic };
-    val.get("ctx_strategy")
-        .and_then(|v| v.as_str())
-        .map(CtxStrategy::from_str)
-        .unwrap_or(CtxStrategy::Dynamic)
+pub struct Config {
+    pub ctx_strategy: CtxStrategy,
+    pub disabled_neurons: std::collections::HashSet<String>,
 }
 
-pub fn save_config(strategy: &CtxStrategy) {
+pub fn load_config() -> Config {
+    let default = Config { ctx_strategy: CtxStrategy::Dynamic, disabled_neurons: Default::default() };
+    let path = match config_path() { Some(p) => p, None => return default };
+    let Ok(text) = std::fs::read_to_string(&path) else { return default };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else { return default };
+    let ctx_strategy = val.get("ctx_strategy")
+        .and_then(|v| v.as_str())
+        .map(CtxStrategy::from_str)
+        .unwrap_or(CtxStrategy::Dynamic);
+    let disabled_neurons = val.get("disabled_neurons")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    Config { ctx_strategy, disabled_neurons }
+}
+
+pub fn save_config(strategy: &CtxStrategy, disabled_neurons: &std::collections::HashSet<String>) {
     let Some(path) = config_path() else { return };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let json = serde_json::json!({ "ctx_strategy": strategy.as_str() });
+    let names: Vec<&str> = disabled_neurons.iter().map(String::as_str).collect();
+    let json = serde_json::json!({
+        "ctx_strategy": strategy.as_str(),
+        "disabled_neurons": names,
+    });
     let _ = std::fs::write(&path, json.to_string());
 }
 
@@ -122,7 +137,10 @@ pub struct App {
     pub working_dir: PathBuf,
     // config
     pub ctx_strategy: CtxStrategy,
-    pub config_cursor: usize, // selected option index in config screen
+    pub config_cursor: usize,   // cursor in ctx strategy section
+    pub config_section: usize,  // 0 = ctx strategy, 1 = neurons
+    pub neuron_cursor: usize,   // cursor in neurons section
+    pub disabled_neurons: std::collections::HashSet<String>,
     // model select
     pub models: Vec<ModelEntry>,
     pub model_cursor: usize,
@@ -157,12 +175,17 @@ pub struct App {
 
 impl App {
     pub fn new(base_url: String) -> Self {
+        let cfg = load_config();
+        let config_cursor = cfg.ctx_strategy.index();
         Self {
             screen: Screen::ModelSelect,
             base_url,
             working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            ctx_strategy: load_config(),
-            config_cursor: load_config().index(),
+            ctx_strategy: cfg.ctx_strategy,
+            config_cursor,
+            config_section: 0,
+            neuron_cursor: 0,
+            disabled_neurons: cfg.disabled_neurons,
             models: Vec::new(),
             model_cursor: 0,
             loading_models: true,
@@ -205,15 +228,27 @@ impl App {
 
     pub fn confirm_config(&mut self) {
         self.ctx_strategy = CtxStrategy::from_index(self.config_cursor);
-        save_config(&self.ctx_strategy);
+        save_config(&self.ctx_strategy, &self.disabled_neurons);
+    }
+
+    pub fn toggle_neuron(&mut self) {
+        if let Some(neuron) = self.neurons.get(self.neuron_cursor) {
+            let name = neuron.name.clone();
+            if self.disabled_neurons.contains(&name) {
+                self.disabled_neurons.remove(&name);
+            } else {
+                self.disabled_neurons.insert(name);
+            }
+            save_config(&self.ctx_strategy, &self.disabled_neurons);
+        }
     }
 
     pub fn toggle_config(&mut self) {
         self.screen = match self.screen {
             Screen::Config => Screen::ModelSelect,
             Screen::ModelSelect => {
-                // sync cursor to current selection when opening
                 self.config_cursor = self.ctx_strategy.index();
+                self.config_section = 0;
                 Screen::Config
             }
             Screen::Chat => Screen::Chat,
@@ -225,7 +260,10 @@ impl App {
             let name = entry.name.clone();
             self.selected_model = Some(name.clone());
             self.context_length = crate::ollama::fetch_context_length(&self.base_url, &name);
-            self.tool_context = crate::synapse::build_tool_context(&self.neurons);
+            let enabled: Vec<&crate::synapse::Neuron> = self.neurons.iter()
+                .filter(|n| !self.disabled_neurons.contains(&n.name))
+                .collect();
+            self.tool_context = crate::synapse::build_tool_context(&enabled);
             self.used_tokens = 0;
             self.messages.clear();
             self.input.clear();

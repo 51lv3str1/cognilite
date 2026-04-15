@@ -30,16 +30,27 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
+    // ctx strategy box: 2 options × (1 label + 1 desc) + 1 gap + borders = 8
+    let ctx_h: u16 = 8;
+    // neurons box: 1 line per neuron + borders
+    let neuron_h: u16 = app.neurons.len().max(1) as u16 + 2;
+    // gap between boxes
+    let gap: u16 = 1;
+
+    let total = ctx_h + gap + neuron_h + 2 /*hints*/ + 3 /*title*/;
     let vert = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Fill(1),
             Constraint::Length(3),
-            Constraint::Length(8),
+            Constraint::Length(ctx_h),
+            Constraint::Length(gap),
+            Constraint::Length(neuron_h),
             Constraint::Length(2),
             Constraint::Fill(1),
         ])
         .split(area);
+    let _ = total; // used for documentation only
 
     let horiz = |row: Rect| {
         Layout::default()
@@ -57,76 +68,78 @@ fn draw_config(frame: &mut Frame, app: &App) {
     .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(SURFACE)));
     frame.render_widget(title, horiz(vert[1]));
 
-    struct Option<'a> { label: &'a str, desc: &'a str, strategy: CtxStrategy }
-    let options = [
-        Option {
-            label: "Dynamic context",
-            desc:  "Grows with the conversation. Faster, lower memory.",
-            strategy: CtxStrategy::Dynamic,
-        },
-        Option {
-            label: "Full context",
-            desc:  "Always uses the model's max window. Slower but never\ntruncates long histories.",
-            strategy: CtxStrategy::Full,
-        },
+    // ── Context strategy ─────────────────────────────────────────────────────
+    struct CtxOption<'a> { label: &'a str, desc: &'a str, strategy: CtxStrategy }
+    let ctx_options = [
+        CtxOption { label: "Dynamic context", desc: "Grows with the conversation. Faster, lower memory.", strategy: CtxStrategy::Dynamic },
+        CtxOption { label: "Full context",    desc: "Always uses the model's max window. Slower but never\ntruncates long histories.", strategy: CtxStrategy::Full },
     ];
 
-    let block = Block::default()
-        .title(Span::styled(" Context strategy ", Style::default().fg(ACCENT)))
+    let ctx_focused = app.config_section == 0;
+    let ctx_border_style = if ctx_focused { Style::default().fg(ACCENT) } else { Style::default().fg(DIM) };
+    let ctx_block = Block::default()
+        .title(Span::styled(" Context strategy ", ctx_border_style))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT))
+        .border_style(ctx_border_style)
         .style(Style::default().bg(BG));
 
-    let inner = {
-        let b = horiz(vert[2]);
-        frame.render_widget(block, b);
-        Rect { x: b.x + 1, y: b.y + 1, width: b.width.saturating_sub(2), height: b.height.saturating_sub(2) }
-    };
+    let ctx_area = horiz(vert[2]);
+    let ctx_inner = Rect { x: ctx_area.x + 1, y: ctx_area.y + 1, width: ctx_area.width.saturating_sub(2), height: ctx_area.height.saturating_sub(2) };
+    frame.render_widget(ctx_block, ctx_area);
 
-    let mut y = inner.y;
-    for (i, opt) in options.iter().enumerate() {
-        let cursor  = i == app.config_cursor;         // keyboard focus
-        let checked = opt.strategy == app.ctx_strategy; // actually saved/selected
+    let mut y = ctx_inner.y;
+    for (i, opt) in ctx_options.iter().enumerate() {
+        let cursor  = ctx_focused && i == app.config_cursor;
+        let checked = opt.strategy == app.ctx_strategy;
+        let (marker, circle_fg) = if checked { ("●", ACCENT) } else { ("○", DIM) };
+        let label_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+        let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
 
-        // circle: filled + accent when checked, empty + dim otherwise
-        let (marker, circle_style) = if checked {
-            ("●", Style::default().fg(ACCENT))
-        } else {
-            ("○", Style::default().fg(DIM))
-        };
-
-        // row bg: highlighted when cursor is here
-        let row_bg = if cursor { Some(SURFACE) } else { None };
-        let base_style = match row_bg {
-            Some(bg) => Style::default().bg(bg),
-            None     => Style::default(),
-        };
-
-        let label_style = if cursor {
-            Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let label_line = Line::from(vec![
-            Span::styled(format!("  {marker} "), base_style.patch(circle_style)),
+        frame.render_widget(Paragraph::new(Line::from(vec![
+            Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
             Span::styled(opt.label, label_style),
-        ]);
-        frame.render_widget(Paragraph::new(label_line), Rect { x: inner.x, y, width: inner.width, height: 1 });
+        ])), Rect { x: ctx_inner.x, y, width: ctx_inner.width, height: 1 });
         y += 1;
 
         for desc_line in opt.desc.lines() {
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    format!("    {desc_line}"),
-                    Style::default().fg(DIM),
-                ))),
-                Rect { x: inner.x, y, width: inner.width, height: 1 },
-            );
+            frame.render_widget(Paragraph::new(Line::from(Span::styled(
+                format!("    {desc_line}"), Style::default().fg(DIM),
+            ))), Rect { x: ctx_inner.x, y, width: ctx_inner.width, height: 1 });
             y += 1;
         }
         y += 1;
+    }
+
+    // ── Neurons ───────────────────────────────────────────────────────────────
+    let neu_focused = app.config_section == 1;
+    let neu_border_style = if neu_focused { Style::default().fg(ACCENT) } else { Style::default().fg(DIM) };
+    let neu_block = Block::default()
+        .title(Span::styled(" Neurons ", neu_border_style))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(neu_border_style)
+        .style(Style::default().bg(BG));
+
+    let neu_area = horiz(vert[4]);
+    let neu_inner = Rect { x: neu_area.x + 1, y: neu_area.y + 1, width: neu_area.width.saturating_sub(2), height: neu_area.height.saturating_sub(2) };
+    frame.render_widget(neu_block, neu_area);
+
+    for (i, neuron) in app.neurons.iter().enumerate() {
+        let cursor  = neu_focused && i == app.neuron_cursor;
+        let enabled = !app.disabled_neurons.contains(&neuron.name);
+        let (marker, circle_fg) = if enabled { ("●", ACCENT) } else { ("○", DIM) };
+
+        let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+        let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
+        let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+
+        let desc = if neuron.description.is_empty() { String::new() } else { format!("  —  {}", neuron.description) };
+        frame.render_widget(Paragraph::new(Line::from(vec![
+            Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
+            Span::styled(&neuron.name, name_style),
+            Span::styled(desc, desc_style),
+        ])), Rect { x: neu_inner.x, y: neu_inner.y + i as u16, width: neu_inner.width, height: 1 });
     }
 
     // hints
@@ -135,12 +148,14 @@ fn draw_config(frame: &mut Frame, app: &App) {
         Span::raw("  "),
         hint("Enter", "select"),
         Span::raw("  "),
-        hint("Tab/Esc", "close"),
+        hint("Tab", "switch section"),
+        Span::raw("  "),
+        hint("Esc", "close"),
         Span::raw("  "),
         hint("Ctrl+C", "quit"),
     ]))
     .style(Style::default().fg(DIM));
-    frame.render_widget(hints, horiz(vert[3]));
+    frame.render_widget(hints, horiz(vert[5]));
 }
 
 fn draw_model_select(frame: &mut Frame, app: &App) {

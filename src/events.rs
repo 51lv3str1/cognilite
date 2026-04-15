@@ -28,17 +28,42 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_config(app: &mut App, key: KeyEvent) {
-    const OPTIONS: usize = 2;
     match key.code {
-        KeyCode::Up   | KeyCode::Char('k') => {
-            if app.config_cursor > 0 { app.config_cursor -= 1; }
+        KeyCode::Esc => { app.toggle_config(); return; }
+        // Tab switches between sections
+        KeyCode::Tab => {
+            app.config_section = if app.config_section == 0 { 1 } else { 0 };
+            return;
         }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if app.config_cursor + 1 < OPTIONS { app.config_cursor += 1; }
-        }
-        KeyCode::Enter => app.confirm_config(),
-        KeyCode::Esc | KeyCode::Tab => app.toggle_config(),
         _ => {}
+    }
+
+    if app.config_section == 0 {
+        // ctx strategy section
+        const OPTIONS: usize = 2;
+        match key.code {
+            KeyCode::Up   | KeyCode::Char('k') => {
+                if app.config_cursor > 0 { app.config_cursor -= 1; }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if app.config_cursor + 1 < OPTIONS { app.config_cursor += 1; }
+            }
+            KeyCode::Enter => app.confirm_config(),
+            _ => {}
+        }
+    } else {
+        // neurons section
+        let count = app.neurons.len();
+        match key.code {
+            KeyCode::Up   | KeyCode::Char('k') => {
+                if app.neuron_cursor > 0 { app.neuron_cursor -= 1; }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if count > 0 && app.neuron_cursor + 1 < count { app.neuron_cursor += 1; }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => app.toggle_neuron(),
+            _ => {}
+        }
     }
 }
 

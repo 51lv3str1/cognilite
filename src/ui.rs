@@ -86,43 +86,54 @@ fn draw_config(frame: &mut Frame, app: &App) {
 
     let mut y = inner.y;
     for (i, opt) in options.iter().enumerate() {
-        let selected = i == app.config_cursor;
-        let active   = opt.strategy == app.ctx_strategy;
+        let cursor  = i == app.config_cursor;         // keyboard focus
+        let checked = opt.strategy == app.ctx_strategy; // actually saved/selected
 
-        let marker = if active { "●" } else { "○" };
-        let label_style = if selected {
-            Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)
+        // circle: filled + accent when checked, empty + dim otherwise
+        let (marker, circle_style) = if checked {
+            ("●", Style::default().fg(ACCENT))
+        } else {
+            ("○", Style::default().fg(DIM))
+        };
+
+        // row bg: highlighted when cursor is here
+        let row_bg = if cursor { Some(SURFACE) } else { None };
+        let base_style = match row_bg {
+            Some(bg) => Style::default().bg(bg),
+            None     => Style::default(),
+        };
+
+        let label_style = if cursor {
+            Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
-        let marker_style = if active {
-            Style::default().fg(ACCENT)
-        } else {
-            Style::default().fg(DIM)
-        };
 
         let label_line = Line::from(vec![
-            Span::styled(format!("  {marker} "), if selected { Style::default().fg(BG).bg(ACCENT) } else { marker_style }),
+            Span::styled(format!("  {marker} "), base_style.patch(circle_style)),
             Span::styled(opt.label, label_style),
-            if selected { Span::styled("  ", Style::default().bg(ACCENT)) } else { Span::raw("") },
         ]);
         frame.render_widget(Paragraph::new(label_line), Rect { x: inner.x, y, width: inner.width, height: 1 });
         y += 1;
 
         for desc_line in opt.desc.lines() {
-            let desc = Paragraph::new(Line::from(Span::styled(
-                format!("    {desc_line}"),
-                Style::default().fg(DIM),
-            )));
-            frame.render_widget(desc, Rect { x: inner.x, y, width: inner.width, height: 1 });
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!("    {desc_line}"),
+                    Style::default().fg(DIM),
+                ))),
+                Rect { x: inner.x, y, width: inner.width, height: 1 },
+            );
             y += 1;
         }
-        y += 1; // gap between options
+        y += 1;
     }
 
     // hints
     let hints = Paragraph::new(Line::from(vec![
-        hint("↑/↓", "select"),
+        hint("↑/↓", "navigate"),
+        Span::raw("  "),
+        hint("Enter", "select"),
         Span::raw("  "),
         hint("Tab/Esc", "close"),
         Span::raw("  "),

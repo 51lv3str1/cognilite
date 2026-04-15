@@ -15,6 +15,44 @@ pub enum CtxStrategy {
     Full,    // model's max context length — slower but never truncates history
 }
 
+impl CtxStrategy {
+    pub fn index(&self) -> usize {
+        match self { CtxStrategy::Dynamic => 0, CtxStrategy::Full => 1 }
+    }
+    fn from_index(i: usize) -> Self {
+        match i { 1 => CtxStrategy::Full, _ => CtxStrategy::Dynamic }
+    }
+    fn as_str(&self) -> &'static str {
+        match self { CtxStrategy::Dynamic => "dynamic", CtxStrategy::Full => "full" }
+    }
+    fn from_str(s: &str) -> Self {
+        match s { "full" => CtxStrategy::Full, _ => CtxStrategy::Dynamic }
+    }
+}
+
+fn config_path() -> Option<PathBuf> {
+    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config/cognilite/config.json"))
+}
+
+pub fn load_config() -> CtxStrategy {
+    let path = match config_path() { Some(p) => p, None => return CtxStrategy::Dynamic };
+    let Ok(text) = std::fs::read_to_string(&path) else { return CtxStrategy::Dynamic };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else { return CtxStrategy::Dynamic };
+    val.get("ctx_strategy")
+        .and_then(|v| v.as_str())
+        .map(CtxStrategy::from_str)
+        .unwrap_or(CtxStrategy::Dynamic)
+}
+
+pub fn save_config(strategy: &CtxStrategy) {
+    let Some(path) = config_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json = serde_json::json!({ "ctx_strategy": strategy.as_str() });
+    let _ = std::fs::write(&path, json.to_string());
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Role {
     User,
@@ -123,8 +161,8 @@ impl App {
             screen: Screen::ModelSelect,
             base_url,
             working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            ctx_strategy: CtxStrategy::Dynamic,
-            config_cursor: 0,
+            ctx_strategy: load_config(),
+            config_cursor: load_config().index(),
             models: Vec::new(),
             model_cursor: 0,
             loading_models: true,
@@ -166,17 +204,19 @@ impl App {
     }
 
     pub fn confirm_config(&mut self) {
-        self.ctx_strategy = match self.config_cursor {
-            0 => CtxStrategy::Dynamic,
-            _ => CtxStrategy::Full,
-        };
+        self.ctx_strategy = CtxStrategy::from_index(self.config_cursor);
+        save_config(&self.ctx_strategy);
     }
 
     pub fn toggle_config(&mut self) {
         self.screen = match self.screen {
-            Screen::Config      => Screen::ModelSelect,
-            Screen::ModelSelect => Screen::Config,
-            Screen::Chat        => Screen::Chat,
+            Screen::Config => Screen::ModelSelect,
+            Screen::ModelSelect => {
+                // sync cursor to current selection when opening
+                self.config_cursor = self.ctx_strategy.index();
+                Screen::Config
+            }
+            Screen::Chat => Screen::Chat,
         };
     }
 

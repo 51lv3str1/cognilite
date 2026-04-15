@@ -86,7 +86,6 @@ impl Role {
 
 #[derive(Debug, Clone, Default)]
 pub struct TokenStats {
-    pub prompt_tokens: u64,
     pub response_tokens: u64,
     pub tokens_per_sec: f64,
     pub thinking_secs: Option<f64>, // time until first content token (thinking phase only)
@@ -461,7 +460,6 @@ impl App {
                             self.used_tokens = pt;
                             if let Some(last) = self.messages.last_mut() {
                                 last.stats = Some(TokenStats {
-                                    prompt_tokens: pt,
                                     response_tokens: et,
                                     tokens_per_sec: tps,
                                     thinking_secs: self.thinking_end_secs,

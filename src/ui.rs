@@ -736,7 +736,7 @@ fn draw_help_popup(frame: &mut Frame, app: &App, area: Rect) {
             ("Ctrl+A",       "Beginning of line"),
             ("Ctrl+E",       "End of line"),
             ("Home / End",   "Beginning / end of line"),
-            ("↑  ↓",         "Move between lines (multi-line input)"),
+            ("↑  ↓",         "Move between lines (multi-line) / browse history (single-line)"),
         ]),
         ("Editing", &[
             ("Backspace",    "Delete character before cursor"),

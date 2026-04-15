@@ -20,7 +20,7 @@ cognilite  >  gemma4:e2b  *  ctx 12% / 128k
 │                                                          │
 │   app.rs holds all application state. The App struct     │
 │   contains the message history, input buffer...          │
-│   1.2 tok/s  -  87 tokens  -  4096 prompt  -  72.1s      │
+│   1.2 tok/s  ·  87 tokens  ·  72.1s                       │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────╮
@@ -39,7 +39,7 @@ cognilite  >  gemma4:e2b  *  ctx 12% / 128k
 - **File attachments** (`@path` syntax) — attach text files or images with path autocomplete; context-aware size validation, deduplication, and prompt feedback while processing
 - **Neurons** — groups of tools and instructions that extend the model's capabilities; extensible via `.toml` files placed in `.cognilite/neurons/`
 - **Context window tracking** — header shows `ctx X% / Nk`; warnings appear at 80%, 90%, and 100% usage
-- **Token stats** — after each response: `tok/s · response tokens · prompt tokens · wall-clock duration`
+- **Token stats** — after each response: `tok/s · response tokens · wall-clock duration`; thinking models also show a separate "thought for Xs" label on the thinking block
 - **Input history** — `↑` / `↓` navigates previously sent messages; draft is preserved when entering history
 - **Multiline input** — `Ctrl+N` inserts a newline; input box grows automatically as you type; full readline-style editing shortcuts
 - **Paste support** — paste multiline text from clipboard; newlines are preserved
@@ -178,7 +178,7 @@ Type `@` followed by a file path anywhere in your message:
 </file_content>
 ```
 
-**Images** are sent as base64 in the `images` field (for vision models). Supported extensions: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`.
+**Images** are sent as base64 in the `images` field (for vision models). Supported extensions: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`.
 
 **Size limit:** no arbitrary byte limit — a file is rejected only if its estimated token cost (~bytes/4) exceeds the remaining context window. If the model's context length is unknown, all files are allowed. Rejection shows an inline error:
 ```

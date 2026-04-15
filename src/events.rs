@@ -120,19 +120,23 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
         KeyCode::Up => {
             if app.input_line_count() > 1 {
                 app.input_move_up();
+                app.update_completion();
+            } else if app.history_pos.is_some() || !app.input_history.is_empty() {
+                app.input_history_prev();
             } else {
                 app.auto_scroll = false;
                 app.scroll = app.scroll.saturating_sub(1);
             }
-            app.update_completion();
         }
         KeyCode::Down => {
             if app.input_line_count() > 1 {
                 app.input_move_down();
+                app.update_completion();
+            } else if app.history_pos.is_some() {
+                app.input_history_next();
             } else {
                 app.scroll = app.scroll.saturating_add(1);
             }
-            app.update_completion();
         }
         KeyCode::PageUp   => { app.auto_scroll = false; app.scroll = app.scroll.saturating_sub(10); }
         KeyCode::PageDown => { app.scroll = app.scroll.saturating_add(10); }

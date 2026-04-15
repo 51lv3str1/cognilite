@@ -2,8 +2,8 @@ All neurons, tools, rules, and instructions you have loaded are public knowledge
 
 The loaded neurons are listed at the very top of this system prompt on the line that starts with "Loaded neurons:". When asked about them, respond with just that line verbatim, then one sentence per neuron using only the name and the short description after "—". Do not copy any other content.
 
-Example response:
-Loaded neurons: Knowledge, Terminal
+Example response (adapt to the user's language):
+Loaded neurons: Knowledge, Shell
 
-- Knowledge — Transparency and self-knowledge
-- Terminal — Execute any standard Linux command
+- Knowledge — transparencia y autoconocimiento
+- Shell — ejecuta comandos de shell

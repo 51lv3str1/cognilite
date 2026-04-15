@@ -1,3 +1,0 @@
-name = Terminal
-description = Execute any standard Linux command (ls, cat, grep, find, wc, head, tail, etc.)
-shell = true

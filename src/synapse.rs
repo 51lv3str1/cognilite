@@ -23,9 +23,9 @@ pub struct Neuron {
 }
 
 // Built-in neurons embedded at compile time
-const BUILTIN_TERMINAL_META: &str         = include_str!("../neurons/terminal/neuron.toml");
-const BUILTIN_TERMINAL_THOUGHTS: &[&str]  = &[
-    include_str!("../neurons/terminal/thoughts/rules.md"),
+const BUILTIN_SHELL_META: &str         = include_str!("../neurons/shell/neuron.toml");
+const BUILTIN_SHELL_THOUGHTS: &[&str]  = &[
+    include_str!("../neurons/shell/thoughts/rules.md"),
 ];
 const BUILTIN_KNOWLEDGE_META: &str        = include_str!("../neurons/knowledge/neuron.toml");
 const BUILTIN_KNOWLEDGE_THOUGHTS: &[&str] = &[
@@ -35,8 +35,8 @@ const BUILTIN_KNOWLEDGE_THOUGHTS: &[&str] = &[
 
 pub fn built_ins() -> Vec<Neuron> {
     vec![
-        parse_neuron(BUILTIN_KNOWLEDGE_META,  BUILTIN_KNOWLEDGE_THOUGHTS, &[]),
-        parse_neuron(BUILTIN_TERMINAL_META,  BUILTIN_TERMINAL_THOUGHTS, &[]),
+        parse_neuron(BUILTIN_KNOWLEDGE_META, BUILTIN_KNOWLEDGE_THOUGHTS, &[]),
+        parse_neuron(BUILTIN_SHELL_META,     BUILTIN_SHELL_THOUGHTS,     &[]),
     ]
 }
 
@@ -123,7 +123,7 @@ pub fn build_tool_context(neurons: &[Neuron]) -> String {
         out.push_str(":\n");
 
         if neuron.shell {
-            out.push_str("  To run a Linux command, wrap it in a tool tag. For example: <tool>ls</tool> or <tool>cat README.md</tool>\n");
+            out.push_str("  To run a shell command, wrap it in a tool tag. For example: <tool>ls</tool> or <tool>cat README.md</tool>\n");
         }
         for s in &neuron.synapses {
             let SynapseKind::Tool { usage, .. } = &s.kind;

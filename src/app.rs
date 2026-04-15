@@ -97,6 +97,10 @@ pub struct App {
     // neurons (groups of synapses)
     pub neurons: Vec<crate::synapse::Neuron>,
     pub tool_context: String,
+    // input history
+    pub input_history: Vec<String>,
+    pub history_pos: Option<usize>,
+    pub input_draft: String,
     // misc
     pub should_quit: bool,
     pub show_help: bool,
@@ -140,6 +144,9 @@ impl App {
                 n
             },
             tool_context: String::new(), // built after synapses are loaded, in select_model
+            input_history: Vec::new(),
+            history_pos: None,
+            input_draft: String::new(),
             should_quit: false,
             show_help: false,
             help_scroll: 0,
@@ -168,6 +175,15 @@ impl App {
             return;
         }
         let raw = self.input.trim().to_string();
+        // push to history (skip if duplicate of last entry)
+        if self.input_history.last().map(String::as_str) != Some(&raw) {
+            self.input_history.push(raw.clone());
+            if self.input_history.len() > 100 {
+                self.input_history.remove(0);
+            }
+        }
+        self.history_pos = None;
+        self.input_draft.clear();
         self.input.clear();
         self.cursor_pos = 0;
         self.completion = None;
@@ -205,6 +221,7 @@ impl App {
 
         let model = self.selected_model.clone().unwrap();
         let base_url = self.base_url.clone();
+        let num_ctx = self.context_length;
 
         // prepend tool context as a system message if we have tools
         let mut chat_messages: Vec<ChatMessage> = Vec::new();
@@ -234,7 +251,7 @@ impl App {
         self.stream_started_at = Some(std::time::Instant::now());
 
         std::thread::spawn(move || {
-            crate::ollama::stream_chat(&base_url, model, chat_messages, tx);
+            crate::ollama::stream_chat(&base_url, model, chat_messages, num_ctx, tx);
         });
     }
 
@@ -614,6 +631,39 @@ impl App {
     // number of visual lines the input currently occupies
     pub fn input_line_count(&self) -> usize {
         self.input.matches('\n').count() + 1
+    }
+
+    pub fn input_history_prev(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+        let new_pos = match self.history_pos {
+            None => {
+                // save current draft before entering history
+                self.input_draft = self.input.clone();
+                self.input_history.len() - 1
+            }
+            Some(0) => 0,
+            Some(p) => p - 1,
+        };
+        self.history_pos = Some(new_pos);
+        self.input = self.input_history[new_pos].clone();
+        self.cursor_pos = self.input.chars().count();
+    }
+
+    pub fn input_history_next(&mut self) {
+        let Some(pos) = self.history_pos else { return };
+        if pos + 1 < self.input_history.len() {
+            let new_pos = pos + 1;
+            self.history_pos = Some(new_pos);
+            self.input = self.input_history[new_pos].clone();
+            self.cursor_pos = self.input.chars().count();
+        } else {
+            // past the end — restore draft
+            self.history_pos = None;
+            self.input = self.input_draft.clone();
+            self.cursor_pos = self.input.chars().count();
+        }
     }
 
     fn char_to_byte(&self, char_idx: usize) -> usize {

@@ -172,7 +172,7 @@ Neurons are groups of capabilities loaded at startup. Each neuron can contain:
 
 - **Synapses** — specific tools the model can invoke by wrapping a command in `<tool>` tags
 - **Thoughts** — markdown files injected into the system prompt that shape how the model reasons
-- **Terminal passthrough** — a neuron with `shell = true` lets the model run any Linux command directly
+- **Shell passthrough** — a neuron with `shell = true` lets the model run any shell command directly
 
 When the model outputs `<tool>command args</tool>`, cognilite intercepts the tag, runs the command in the working directory, injects the result as `Tool result:`, and resumes the stream so the model can continue with the output in context.
 
@@ -181,7 +181,7 @@ When the model outputs `<tool>command args</tool>`, cognilite intercepts the tag
 | Neuron | Description |
 |--------|-------------|
 | `Knowledge` | Self-awareness: how cognilite works, tool execution flow, transparency rules |
-| `Terminal` | Shell passthrough — runs any standard Linux command (`ls`, `cat`, `grep`, `find`, …) |
+| `Shell` | Shell passthrough — runs shell commands (`ls`, `cat`, `grep`, `find`, …) |
 
 ### Adding a neuron
 
@@ -222,7 +222,7 @@ The last two commits fixed a login bug and added dark mode.
 **Shell passthrough** (run any command, no synapse files needed):
 ```toml
 name = "Terminal"
-description = "Execute Linux commands"
+description = "Execute shell commands"
 shell = true
 ```
 
@@ -262,7 +262,7 @@ src/
 
 neurons/
 ├── knowledge/     — built-in Knowledge neuron (thoughts injected as system prompt)
-└── terminal/      — built-in Terminal neuron (shell passthrough)
+└── terminal/      — built-in Shell neuron (shell passthrough)
 ```
 
 ### Key types (`app.rs`)

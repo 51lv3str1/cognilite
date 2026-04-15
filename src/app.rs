@@ -29,7 +29,7 @@ pub struct TokenStats {
     pub prompt_tokens: u64,
     pub response_tokens: u64,
     pub tokens_per_sec: f64,
-    pub duration_secs: f64,
+    pub wall_secs: f64, // wall-clock time from send to done
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -321,6 +321,9 @@ impl App {
                     }
                     if chunk.done {
                         // attach token stats
+                        let wall_secs = self.stream_started_at
+                            .map(|t| t.elapsed().as_secs_f64())
+                            .unwrap_or(0.0);
                         if let (Some(pt), Some(et), Some(ed)) = (
                             chunk.prompt_eval_count,
                             chunk.eval_count,
@@ -337,9 +340,15 @@ impl App {
                                     prompt_tokens: pt,
                                     response_tokens: et,
                                     tokens_per_sec: tps,
-                                    duration_secs: ed as f64 / 1_000_000_000.0,
+                                    wall_secs,
                                 });
                             }
+                        } else if let Some(last) = self.messages.last_mut() {
+                            // no Ollama stats but we have wall time
+                            last.stats = Some(TokenStats {
+                                wall_secs,
+                                ..Default::default()
+                            });
                         }
                         self.stream_state = StreamState::Idle;
                         self.stream_started_at = None;

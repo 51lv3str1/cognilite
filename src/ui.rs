@@ -312,20 +312,22 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                     };
                     lines.push(Line::from(Span::styled(label, Style::default().fg(DIM))));
                 } else {
-                    let thought_secs = msg.stats.as_ref().map(|s| s.duration_secs);
+                    let thought_secs = msg.stats.as_ref().map(|s| s.wall_secs);
                     render_assistant_content(&mut lines, &msg.thinking, &msg.content, inner_width, streaming, thought_secs);
                 }
                 if let Some(ref s) = msg.stats {
-                    lines.push(Line::from(Span::styled(
-                        format!(
-                            "  {} tok/s  ·  {} tokens  ·  {} prompt  ·  {}",
-                            format!("{:.1}", s.tokens_per_sec),
-                            s.response_tokens,
-                            s.prompt_tokens,
-                            format_duration(s.duration_secs),
-                        ),
-                        Style::default().fg(DIM),
-                    )));
+                    if s.response_tokens > 0 {
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "  {} tok/s  ·  {} tokens  ·  {} prompt  ·  {}",
+                                format!("{:.1}", s.tokens_per_sec),
+                                s.response_tokens,
+                                s.prompt_tokens,
+                                format_duration(s.wall_secs),
+                            ),
+                            Style::default().fg(DIM),
+                        )));
+                    }
                 }
             }
         }

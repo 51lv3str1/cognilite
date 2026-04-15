@@ -447,7 +447,11 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                     };
                     lines.push(Line::from(Span::styled(label, Style::default().fg(DIM))));
                 } else {
-                    let thought_secs = msg.stats.as_ref().map(|s| s.wall_secs);
+                    // use thinking_secs (phase only) for the "thought for X" label;
+                    // fall back to wall_secs if there was no content transition captured
+                    let thought_secs = msg.stats.as_ref().map(|s| {
+                        s.thinking_secs.unwrap_or(s.wall_secs)
+                    });
                     render_assistant_content(&mut lines, &msg.thinking, &msg.content, inner_width, streaming, thought_secs);
                 }
                 if let Some(ref s) = msg.stats {

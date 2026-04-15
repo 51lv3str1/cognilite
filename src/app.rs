@@ -89,7 +89,8 @@ pub struct TokenStats {
     pub prompt_tokens: u64,
     pub response_tokens: u64,
     pub tokens_per_sec: f64,
-    pub wall_secs: f64, // wall-clock time from send to done
+    pub thinking_secs: Option<f64>, // time until first content token (thinking phase only)
+    pub wall_secs: f64,             // total wall-clock time from send to done
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -159,6 +160,7 @@ pub struct App {
     pub stream_state: StreamState,
     pub stream_rx: Option<mpsc::Receiver<StreamChunk>>,
     pub stream_started_at: Option<std::time::Instant>,
+    pub thinking_end_secs: Option<f64>, // captured when first content token arrives
     pub completion: Option<Completion>,
     // neurons (groups of synapses)
     pub neurons: Vec<crate::synapse::Neuron>,
@@ -202,6 +204,7 @@ impl App {
             stream_state: StreamState::Idle,
             stream_rx: None,
             stream_started_at: None,
+            thinking_end_secs: None,
             completion: None,
             neurons: {
                 let mut n = crate::synapse::built_ins();
@@ -360,6 +363,7 @@ impl App {
         self.stream_rx = Some(rx);
         self.stream_state = StreamState::Streaming;
         self.stream_started_at = Some(std::time::Instant::now());
+        self.thinking_end_secs = None;
 
         std::thread::spawn(move || {
             crate::ollama::stream_chat(&base_url, model, chat_messages, num_ctx, tx);
@@ -389,6 +393,15 @@ impl App {
                     if let Some(msg) = chunk.message {
                         if let Some(last) = self.messages.last_mut() {
                             if last.role == Role::Assistant {
+                                // capture thinking end time on first content token
+                                if !msg.content.is_empty()
+                                    && last.content.is_empty()
+                                    && !last.thinking.is_empty()
+                                    && self.thinking_end_secs.is_none()
+                                {
+                                    self.thinking_end_secs = self.stream_started_at
+                                        .map(|t| t.elapsed().as_secs_f64());
+                                }
                                 last.content.push_str(&msg.content);
                                 last.llm_content.push_str(&msg.content);
                                 if let Some(t) = msg.thinking {
@@ -451,16 +464,18 @@ impl App {
                                     prompt_tokens: pt,
                                     response_tokens: et,
                                     tokens_per_sec: tps,
+                                    thinking_secs: self.thinking_end_secs,
                                     wall_secs,
                                 });
                             }
                         } else if let Some(last) = self.messages.last_mut() {
-                            // no Ollama stats but we have wall time
                             last.stats = Some(TokenStats {
+                                thinking_secs: self.thinking_end_secs,
                                 wall_secs,
                                 ..Default::default()
                             });
                         }
+                        self.thinking_end_secs = None;
                         self.stream_state = StreamState::Idle;
                         self.stream_started_at = None;
                         return;

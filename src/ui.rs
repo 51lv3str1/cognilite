@@ -122,9 +122,9 @@ fn draw_config(frame: &mut Frame, app: &App) {
 
     // hints
     let hints = Paragraph::new(Line::from(vec![
-        hint("↑/↓", "navigate"),
+        hint("↑/↓", "select"),
         Span::raw("  "),
-        hint("Enter", "confirm"),
+        hint("Tab/Esc", "close"),
         Span::raw("  "),
         hint("Ctrl+C", "quit"),
     ]))
@@ -259,6 +259,8 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         hint("↑/↓", "navigate"),
         Span::raw("  "),
         hint("Enter", "select"),
+        Span::raw("  "),
+        hint("Tab", "settings"),
         Span::raw("  "),
         hint("Ctrl+C", "quit"),
     ]))

@@ -120,7 +120,7 @@ pub struct App {
 impl App {
     pub fn new(base_url: String) -> Self {
         Self {
-            screen: Screen::Config,
+            screen: Screen::ModelSelect,
             base_url,
             working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             ctx_strategy: CtxStrategy::Dynamic,
@@ -170,7 +170,14 @@ impl App {
             0 => CtxStrategy::Dynamic,
             _ => CtxStrategy::Full,
         };
-        self.screen = Screen::ModelSelect;
+    }
+
+    pub fn toggle_config(&mut self) {
+        self.screen = match self.screen {
+            Screen::Config      => Screen::ModelSelect,
+            Screen::ModelSelect => Screen::Config,
+            Screen::Chat        => Screen::Chat,
+        };
     }
 
     pub fn select_model(&mut self) {

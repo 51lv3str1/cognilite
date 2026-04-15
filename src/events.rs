@@ -32,16 +32,22 @@ fn handle_config(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up   | KeyCode::Char('k') => {
             if app.config_cursor > 0 { app.config_cursor -= 1; }
+            app.confirm_config();
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if app.config_cursor + 1 < OPTIONS { app.config_cursor += 1; }
+            app.confirm_config();
         }
-        KeyCode::Enter => app.confirm_config(),
+        KeyCode::Esc | KeyCode::Tab => app.toggle_config(),
         _ => {}
     }
 }
 
 fn handle_model_select(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Tab => { app.toggle_config(); return; }
+        _ => {}
+    }
     if app.models.is_empty() {
         return;
     }

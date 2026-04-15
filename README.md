@@ -13,7 +13,7 @@ cognilite  >  gemma4:e2b  *  ctx 12% / 128k
 │ Assistant                                                │
 │   Let me check.                                          │
 │                                                          │
-│  * Terminal > cat  app.rs  18.4 KB                       │
+│  * Shell > cat  app.rs  18.4 KB                          │
 │  | pub struct App {                                      │
 │  |     pub screen: Screen,                               │
 │  | ...                                                   │
@@ -39,10 +39,12 @@ cognilite  >  gemma4:e2b  *  ctx 12% / 128k
 - **File attachments** (`@path` syntax) — attach text files or images with path autocomplete; context-aware size validation, deduplication, and prompt feedback while processing
 - **Neurons** — groups of tools and instructions that extend the model's capabilities; extensible via `.toml` files placed in `.cognilite/neurons/`
 - **Context window tracking** — header shows `ctx X% / Nk`; warnings appear at 80%, 90%, and 100% usage
-- **Token stats** — after each response: `tok/s · response tokens · prompt tokens · duration`
+- **Token stats** — after each response: `tok/s · response tokens · prompt tokens · wall-clock duration`
+- **Input history** — `↑` / `↓` navigates previously sent messages; draft is preserved when entering history
 - **Multiline input** — `Ctrl+N` inserts a newline; input box grows automatically as you type; full readline-style editing shortcuts
 - **Paste support** — paste multiline text from clipboard; newlines are preserved
 - **Stop generation** — `Esc` while streaming cancels the current response
+- **Settings screen** — configure context strategy and enable/disable neurons; persisted to `~/.config/cognilite/config.json`
 - **TTY compatible** — no kitty protocol, no sixel, degrades gracefully on any terminal
 
 ## Requirements
@@ -71,7 +73,19 @@ cargo build --release
 | `↑` / `k` | Move cursor up |
 | `↓` / `j` | Move cursor down |
 | `Enter` | Select model and open chat |
+| `Tab` | Open settings |
 | `q` / `Ctrl+C` | Quit |
+
+### Settings screen
+
+| Key | Action |
+|-----|--------|
+| `↑` / `k` | Move cursor up |
+| `↓` / `j` | Move cursor down |
+| `Enter` | Confirm selection |
+| `Tab` | Switch between sections |
+| `Esc` | Close and return to model select |
+| `Ctrl+C` | Quit |
 
 ### Chat screen
 
@@ -103,6 +117,13 @@ cargo build --release
 | `Ctrl+W` | Delete word before cursor |
 | `Ctrl+K` | Delete to end of line |
 | `Ctrl+U` | Delete to beginning of line |
+
+#### History
+
+| Key | Action |
+|-----|--------|
+| `↑` (single-line input) | Previous message in history |
+| `↓` (in history) | Next message / restore draft |
 
 #### Scrolling
 
@@ -183,6 +204,8 @@ When the model outputs `<tool>command args</tool>`, cognilite intercepts the tag
 | `Knowledge` | Self-awareness: how cognilite works, tool execution flow, transparency rules |
 | `Shell` | Shell passthrough — runs shell commands (`ls`, `cat`, `grep`, `find`, …) |
 
+Neurons can be enabled or disabled individually from the settings screen (`Tab` on model select). The selection persists across sessions.
+
 ### Adding a neuron
 
 Create a directory under `.cognilite/neurons/<name>/` in your project (or `~/.config/cognilite/neurons/<name>/` for global neurons):
@@ -209,19 +232,11 @@ kind = "tool"
 command = "git log --oneline -20"
 description = "Show the last 20 commits"
 usage = "git-log"
----
-User: what changed recently?
-Assistant: <tool>git-log</tool>
-Tool result:
-a1b2c3d fix login bug
-e4f5g6h add dark mode
-
-The last two commits fixed a login bug and added dark mode.
 ```
 
 **Shell passthrough** (run any command, no synapse files needed):
 ```toml
-name = "Terminal"
+name = "Shell"
 description = "Execute shell commands"
 shell = true
 ```
@@ -233,6 +248,23 @@ shell = true
 3. **User-global** — `~/.config/cognilite/neurons/`
 
 Later entries with the same trigger override earlier ones.
+
+## Settings
+
+Open with `Tab` from the model select screen. Settings persist to `~/.config/cognilite/config.json`.
+
+### Context strategy
+
+Controls how much of the model's context window Ollama allocates per request.
+
+| Strategy | Behavior |
+|----------|----------|
+| **Dynamic** (default) | Allocates `max(8192, used_tokens × 2)` tokens — grows with the conversation, faster startup |
+| **Full** | Always allocates the model's maximum context window — slower but never truncates long histories |
+
+### Neuron selector
+
+Toggle individual neurons on or off. Disabled neurons are excluded from the system prompt when a model is selected. Use `Tab` to switch between the Context strategy and Neurons sections.
 
 ## Context Window
 
@@ -256,31 +288,35 @@ src/
 ├── main.rs        — entry point, event loop, model loading
 ├── app.rs         — App state, message types, input editing, attachment resolution, tool loop
 ├── synapse.rs     — Neuron/Synapse types, built-in loading, tool context builder, .toml parser
-├── events.rs      — key event dispatch (model select / chat)
+├── events.rs      — key event dispatch (config / model select / chat)
 ├── ollama.rs      — Ollama API: list_models, stream_chat, fetch_context_length
-└── ui.rs          — ratatui rendering: model select, chat, markdown, code blocks, popups
+└── ui.rs          — ratatui rendering: config, model select, chat, markdown, code blocks, popups
 
 neurons/
 ├── knowledge/     — built-in Knowledge neuron (thoughts injected as system prompt)
-└── terminal/      — built-in Shell neuron (shell passthrough)
+└── shell/         — built-in Shell neuron (shell passthrough)
 ```
 
 ### Key types (`app.rs`)
 
 ```rust
 struct App {
-    screen: Screen,              // ModelSelect | Chat
+    screen: Screen,              // Config | ModelSelect | Chat
+    ctx_strategy: CtxStrategy,  // Dynamic | Full
+    disabled_neurons: HashSet<String>,
     messages: Vec<Message>,
     input: String,
-    cursor_pos: usize,           // char offset in input
+    cursor_pos: usize,
+    input_history: Vec<String>,
+    history_pos: Option<usize>,
     stream_state: StreamState,   // Idle | Streaming | Error(String)
     stream_rx: Option<Receiver<StreamChunk>>,
     used_tokens: u64,
     context_length: Option<u64>,
     working_dir: PathBuf,
-    completion: Option<Completion>, // active @path autocomplete popup
+    completion: Option<Completion>,
     neurons: Vec<Neuron>,
-    tool_context: String,        // built once at model selection, injected each request
+    tool_context: String,        // built at model selection from enabled neurons
 }
 
 struct Neuron {
@@ -298,7 +334,7 @@ struct Message {
     images: Vec<String>,     // base64-encoded images
     attachments: Vec<Attachment>,
     thinking: String,
-    stats: Option<TokenStats>,
+    stats: Option<TokenStats>, // wall_secs, tok/s, token counts
 }
 ```
 
@@ -324,3 +360,5 @@ Thinking models send a `message.thinking` field in early chunks before `message.
 | `list_models` | `GET /api/tags` | Startup |
 | `fetch_context_length` | `POST /api/show` | After model selection |
 | `stream_chat` | `POST /api/chat` | Each message send / tool round-trip |
+
+`stream_chat` passes `num_ctx` in the request options according to the active context strategy.

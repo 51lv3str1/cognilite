@@ -221,7 +221,13 @@ impl App {
 
         let model = self.selected_model.clone().unwrap();
         let base_url = self.base_url.clone();
-        let num_ctx = self.context_length;
+        // Size num_ctx dynamically: 2× current usage with a 8k floor,
+        // capped at the model's max. Avoids pre-allocating a full 128k KV
+        // cache when the conversation only needs a fraction of it.
+        let num_ctx = self.context_length.map(|max| {
+            let needed = (self.used_tokens * 2).max(8192);
+            needed.min(max)
+        });
 
         // prepend tool context as a system message if we have tools
         let mut chat_messages: Vec<ChatMessage> = Vec::new();

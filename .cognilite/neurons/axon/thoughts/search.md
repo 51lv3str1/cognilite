@@ -27,6 +27,7 @@ To search with surrounding context:
 
 ## Rules
 
+- **Never answer questions about code location from memory or context.** Always run a search and answer from the real result.
 - Always exclude build artifacts and version control: `-not -path "*/target/*" -not -path "*/.git/*" -not -path "*/node_modules/*"`
 - Always use `-n` to show line numbers so the user can navigate directly to the result
 - If the output could be large, limit it: pipe to `| head -60`

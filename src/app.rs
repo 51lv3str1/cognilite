@@ -113,6 +113,7 @@ pub struct Message {
     pub images: Vec<String>,   // base64 images
     pub attachments: Vec<Attachment>,
     pub thinking: String,
+    pub thinking_secs: Option<f64>, // set on intermediate messages interrupted by a tool call
     pub stats: Option<TokenStats>,
     pub tool_call: Option<String>, // "Neuron › trigger" label, set for Role::Tool messages
 }
@@ -305,6 +306,7 @@ impl App {
             images: images.clone(),
             attachments,
             thinking: String::new(),
+            thinking_secs: None,
             stats: None,
             tool_call: None,
         });
@@ -322,6 +324,7 @@ impl App {
             images: vec![],
             attachments: vec![],
             thinking: String::new(),
+            thinking_secs: None,
             stats: None,
             tool_call: None,
         });
@@ -432,9 +435,15 @@ impl App {
                                             // llm_content intentionally NOT updated here
                                         }
                                     }
+                                    // capture thinking duration for the intermediate message
+                                    if let Some(last) = self.messages.last_mut() {
+                                        last.thinking_secs = self.thinking_end_secs
+                                            .or_else(|| self.stream_started_at.map(|t| t.elapsed().as_secs_f64()));
+                                    }
                                     // stop current stream
                                     self.stream_state = StreamState::Idle;
                                     self.stream_started_at = None;
+                                    self.thinking_end_secs = None;
                                     // execute tool and restart stream
                                     self.handle_tool_call(&call);
                                     return;
@@ -564,6 +573,7 @@ impl App {
                 size,
             }],
             thinking: String::new(),
+            thinking_secs: None,
             stats: None,
             tool_call: Some(tool_label),
         });

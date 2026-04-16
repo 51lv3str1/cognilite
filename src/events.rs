@@ -32,7 +32,7 @@ fn handle_config(app: &mut App, key: KeyEvent) {
         KeyCode::Esc => { app.toggle_config(); return; }
         // Tab switches between sections
         KeyCode::Tab => {
-            app.config_section = if app.config_section == 0 { 1 } else { 0 };
+            app.config_section = (app.config_section + 1) % 3;
             return;
         }
         _ => {}
@@ -51,7 +51,7 @@ fn handle_config(app: &mut App, key: KeyEvent) {
             KeyCode::Enter => app.confirm_config(),
             _ => {}
         }
-    } else {
+    } else if app.config_section == 1 {
         // neurons section
         let count = app.neurons.len();
         match key.code {
@@ -62,6 +62,21 @@ fn handle_config(app: &mut App, key: KeyEvent) {
                 if count > 0 && app.neuron_cursor + 1 < count { app.neuron_cursor += 1; }
             }
             KeyCode::Enter | KeyCode::Char(' ') => app.toggle_neuron(),
+            _ => {}
+        }
+    } else {
+        // generation params section
+        let count = crate::app::GEN_PARAMS.len();
+        match key.code {
+            KeyCode::Up   | KeyCode::Char('k') => {
+                if app.param_cursor > 0 { app.param_cursor -= 1; }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if app.param_cursor + 1 < count { app.param_cursor += 1; }
+            }
+            KeyCode::Left  | KeyCode::Char('-') => app.param_adjust(-1.0),
+            KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=') => app.param_adjust(1.0),
+            KeyCode::Char('r') | KeyCode::Backspace => app.param_reset(),
             _ => {}
         }
     }

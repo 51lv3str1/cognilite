@@ -86,18 +86,26 @@ pub fn stream_chat(
     model: String,
     messages: Vec<ChatMessage>,
     num_ctx: Option<u64>,
+    gen_params: [f64; 3],
     tx: Sender<StreamChunk>,
 ) {
     let url = format!("{}/api/chat", base_url);
 
-    let mut body = serde_json::json!({
+    let mut options = serde_json::json!({
+        "temperature":    gen_params[0],
+        "top_p":          gen_params[1],
+        "repeat_penalty": gen_params[2],
+    });
+    if let Some(ctx) = num_ctx {
+        options["num_ctx"] = serde_json::json!(ctx);
+    }
+
+    let body = serde_json::json!({
         "model": model,
         "messages": messages,
         "stream": true,
+        "options": options,
     });
-    if let Some(ctx) = num_ctx {
-        body["options"] = serde_json::json!({ "num_ctx": ctx });
-    }
 
     let response = match ureq::post(&url).send_json(body) {
         Ok(r) => r,

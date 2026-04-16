@@ -34,10 +34,11 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let ctx_h: u16 = 8;
     // neurons box: 1 line per neuron + borders
     let neuron_h: u16 = app.neurons.len().max(1) as u16 + 2;
+    // generation params box: 1 line per param + borders
+    let gen_h: u16 = crate::app::GEN_PARAMS.len() as u16 + 2;
     // gap between boxes
     let gap: u16 = 1;
 
-    let total = ctx_h + gap + neuron_h + 2 /*hints*/ + 3 /*title*/;
     let vert = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -46,11 +47,12 @@ fn draw_config(frame: &mut Frame, app: &App) {
             Constraint::Length(ctx_h),
             Constraint::Length(gap),
             Constraint::Length(neuron_h),
+            Constraint::Length(gap),
+            Constraint::Length(gen_h),
             Constraint::Length(2),
             Constraint::Fill(1),
         ])
         .split(area);
-    let _ = total; // used for documentation only
 
     let horiz = |row: Rect| {
         Layout::default()
@@ -142,20 +144,52 @@ fn draw_config(frame: &mut Frame, app: &App) {
         ])), Rect { x: neu_inner.x, y: neu_inner.y + i as u16, width: neu_inner.width, height: 1 });
     }
 
+    // ── Generation params ─────────────────────────────────────────────────────
+    let gen_focused = app.config_section == 2;
+    let gen_border_style = if gen_focused { Style::default().fg(ACCENT) } else { Style::default().fg(DIM) };
+    let gen_block = Block::default()
+        .title(Span::styled(" Generation ", gen_border_style))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(gen_border_style)
+        .style(Style::default().bg(BG));
+
+    let gen_area = horiz(vert[6]);
+    let gen_inner = Rect { x: gen_area.x + 1, y: gen_area.y + 1, width: gen_area.width.saturating_sub(2), height: gen_area.height.saturating_sub(2) };
+    frame.render_widget(gen_block, gen_area);
+
+    for (i, (name, desc, default, _, _, _)) in crate::app::GEN_PARAMS.iter().enumerate() {
+        let cursor = gen_focused && i == app.param_cursor;
+        let value = app.gen_params[i];
+        let is_default = (value - default).abs() < 0.001;
+
+        let bg         = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+        let name_style = bg.patch(if cursor { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) });
+        let val_style  = bg.patch(if is_default { Style::default().fg(DIM) } else { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) });
+        let dim_style  = bg.patch(Style::default().fg(THINKING_COLOR));
+
+        frame.render_widget(Paragraph::new(Line::from(vec![
+            Span::styled(format!("  {name:<16}"), name_style),
+            Span::styled("← ", dim_style),
+            Span::styled(format!("{value:.2}"), val_style),
+            Span::styled(" →", dim_style),
+            Span::styled(format!("  {desc}"), dim_style),
+        ])), Rect { x: gen_inner.x, y: gen_inner.y + i as u16, width: gen_inner.width, height: 1 });
+    }
+
     // hints
-    let hints = Paragraph::new(Line::from(vec![
-        hint("↑/↓", "navigate"),
-        Span::raw("  "),
-        hint("Enter", "select"),
-        Span::raw("  "),
-        hint("Tab", "switch section"),
-        Span::raw("  "),
-        hint("Esc", "close"),
-        Span::raw("  "),
-        hint("Ctrl+C", "quit"),
-    ]))
-    .style(Style::default().fg(DIM));
-    frame.render_widget(hints, horiz(vert[5]));
+    let action_hint: Vec<Span> = if app.config_section == 2 {
+        vec![hint("←/→", "adjust"), Span::raw("  "), hint("r", "reset")]
+    } else if app.config_section == 1 {
+        vec![hint("Enter", "toggle")]
+    } else {
+        vec![hint("Enter", "select")]
+    };
+    let mut hint_spans = vec![hint("↑/↓", "navigate"), Span::raw("  ")];
+    hint_spans.extend(action_hint);
+    hint_spans.extend([Span::raw("  "), hint("Tab", "switch section"), Span::raw("  "), hint("Esc", "close")]);
+    let hints = Paragraph::new(Line::from(hint_spans)).style(Style::default().fg(DIM));
+    frame.render_widget(hints, horiz(vert[7]));
 }
 
 fn draw_model_select(frame: &mut Frame, app: &App) {

@@ -2,6 +2,13 @@ use std::sync::mpsc;
 use std::path::{Path, PathBuf};
 use crate::ollama::{ChatMessage, ModelEntry, StreamChunk};
 
+/// Generation parameter definitions: (name, description, default, min, max, step)
+pub const GEN_PARAMS: &[(&str, &str, f64, f64, f64, f64)] = &[
+    ("temperature",    "randomness of output",    0.8, 0.0, 2.0, 0.05),
+    ("top_p",          "nucleus sampling cutoff", 0.9, 0.0, 1.0, 0.05),
+    ("repeat_penalty", "repetition penalty",      1.1, 0.5, 2.0, 0.05),
+];
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Screen {
     Config,
@@ -37,10 +44,11 @@ fn config_path() -> Option<PathBuf> {
 pub struct Config {
     pub ctx_strategy: CtxStrategy,
     pub disabled_neurons: std::collections::HashSet<String>,
+    pub gen_params: [f64; 3],
 }
 
 pub fn load_config() -> Config {
-    let default = Config { ctx_strategy: CtxStrategy::Dynamic, disabled_neurons: Default::default() };
+    let default = Config { ctx_strategy: CtxStrategy::Dynamic, disabled_neurons: Default::default(), gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2] };
     let path = match config_path() { Some(p) => p, None => return default };
     let Ok(text) = std::fs::read_to_string(&path) else { return default };
     let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else { return default };
@@ -52,10 +60,15 @@ pub fn load_config() -> Config {
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
-    Config { ctx_strategy, disabled_neurons }
+    let gen_params = [
+        val.get("temperature").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[0].2),
+        val.get("top_p").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[1].2),
+        val.get("repeat_penalty").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[2].2),
+    ];
+    Config { ctx_strategy, disabled_neurons, gen_params }
 }
 
-pub fn save_config(strategy: &CtxStrategy, disabled_neurons: &std::collections::HashSet<String>) {
+pub fn save_config(strategy: &CtxStrategy, disabled_neurons: &std::collections::HashSet<String>, gen_params: &[f64; 3]) {
     let Some(path) = config_path() else { return };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -64,6 +77,9 @@ pub fn save_config(strategy: &CtxStrategy, disabled_neurons: &std::collections::
     let json = serde_json::json!({
         "ctx_strategy": strategy.as_str(),
         "disabled_neurons": names,
+        "temperature": gen_params[0],
+        "top_p": gen_params[1],
+        "repeat_penalty": gen_params[2],
     });
     let _ = std::fs::write(&path, json.to_string());
 }
@@ -169,6 +185,9 @@ pub struct App {
     pub input_history: Vec<String>,
     pub history_pos: Option<usize>,
     pub input_draft: String,
+    // generation params
+    pub gen_params: [f64; 3],
+    pub param_cursor: usize,
     // misc
     pub should_quit: bool,
     pub show_help: bool,
@@ -223,6 +242,8 @@ impl App {
             input_history: Vec::new(),
             history_pos: None,
             input_draft: String::new(),
+            gen_params: cfg.gen_params,
+            param_cursor: 0,
             should_quit: false,
             show_help: false,
             help_scroll: 0,
@@ -231,7 +252,7 @@ impl App {
 
     pub fn confirm_config(&mut self) {
         self.ctx_strategy = CtxStrategy::from_index(self.config_cursor);
-        save_config(&self.ctx_strategy, &self.disabled_neurons);
+        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params);
     }
 
     pub fn toggle_neuron(&mut self) {
@@ -242,8 +263,21 @@ impl App {
             } else {
                 self.disabled_neurons.insert(name);
             }
-            save_config(&self.ctx_strategy, &self.disabled_neurons);
+            save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params);
         }
+    }
+
+    pub fn param_adjust(&mut self, direction: f64) {
+        let (_, _, _, min, max, step) = GEN_PARAMS[self.param_cursor];
+        let v = &mut self.gen_params[self.param_cursor];
+        *v = (*v + direction * step).clamp(min, max);
+        *v = (*v * 100.0).round() / 100.0;
+        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params);
+    }
+
+    pub fn param_reset(&mut self) {
+        self.gen_params[self.param_cursor] = GEN_PARAMS[self.param_cursor].2;
+        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params);
     }
 
     pub fn toggle_config(&mut self) {
@@ -367,8 +401,9 @@ impl App {
         self.stream_started_at = Some(std::time::Instant::now());
         self.thinking_end_secs = None;
 
+        let gen_params = self.gen_params;
         std::thread::spawn(move || {
-            crate::ollama::stream_chat(&base_url, model, chat_messages, num_ctx, tx);
+            crate::ollama::stream_chat(&base_url, model, chat_messages, num_ctx, gen_params, tx);
         });
     }
 

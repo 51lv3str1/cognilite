@@ -4,7 +4,7 @@ Lightweight terminal UI for chatting with local [Ollama](https://ollama.com) mod
 Built in Rust with [ratatui](https://ratatui.rs). No async runtime, no heavy dependencies — single ~2.5 MB binary.
 
 ```
-cognilite  >  gemma4:e2b  *  ctx 12% / 128k
+cognilite  ›  gemma4:e2b  ○   ctx 12% / 128k
 ╭──────────────────────────────────────────────────────────╮
 │                                                          │
 │ You                                                      │
@@ -13,14 +13,14 @@ cognilite  >  gemma4:e2b  *  ctx 12% / 128k
 │ Assistant                                                │
 │   Let me check.                                          │
 │                                                          │
-│  * Shell > cat  app.rs  18.4 KB                          │
-│  | pub struct App {                                      │
-│  |     pub screen: Screen,                               │
-│  | ...                                                   │
+│  ⚙ Efferent › cat  app.rs  18.4 KB                       │
+│  ▎ pub struct App {                                      │
+│  ▎     pub screen: Screen,                               │
+│  ▎ ...                                                   │
 │                                                          │
 │   app.rs holds all application state. The App struct     │
 │   contains the message history, input buffer...          │
-│   1.2 tok/s  ·  87 tokens  ·  72.1s                       │
+│   1.2 tok/s  ·  87 tokens  ·  72.1s                      │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────╮
@@ -31,21 +31,23 @@ cognilite  >  gemma4:e2b  *  ctx 12% / 128k
 
 ## Features
 
-- **Model selection screen** — lists all models pulled in Ollama at startup
+- **Model selection** — lists all models pulled in Ollama; fuzzy search with a `/ search` textbox
 - **Streaming responses** — output renders token by token in real time
-- **Thinking model support** — models that emit a `thinking` field (e.g. nemotron, QwQ) show the reasoning block in a distinct muted color, with a "thought for Xs" label once finished
+- **Thinking model support** — models that emit a `thinking` field (e.g. QwQ, nemotron) show the reasoning block in a muted color with a "thought for Xs" label once finished
 - **Markdown rendering** — `**bold**`, `*italic*`, `` `inline code` ``, headings (`#`, `##`, `###`), and bullet/numbered lists
-- **Code block rendering** — fenced ` ``` ` blocks rendered with a language label and `▎` left gutter
-- **File attachments** (`@path` syntax) — attach text files or images with path autocomplete; context-aware size validation, deduplication, and prompt feedback while processing
-- **Neurons** — groups of tools and instructions that extend the model's capabilities; extensible via `.toml` files placed in `.cognilite/neurons/`
-- **Context window tracking** — header shows `ctx X% / Nk`; warnings appear at 80%, 90%, and 100% usage
-- **Token stats** — after each response: `tok/s · response tokens · wall-clock duration`; thinking models also show a separate "thought for Xs" label on the thinking block
-- **Input history** — `↑` / `↓` navigates previously sent messages; draft is preserved when entering history
-- **Multiline input** — `Ctrl+N` inserts a newline; input box grows automatically as you type; full readline-style editing shortcuts
-- **Paste support** — paste multiline text from clipboard; newlines are preserved
+- **Code block rendering** — fenced ` ``` ` blocks with language label and `▎` left gutter
+- **File attachments** (`@path` syntax) — attach text files or images with path autocomplete; context-aware size validation and deduplication
+- **Neurons** — groups of tools and instructions that extend the model's capabilities, loaded from `.toml` files in `.cognilite/neurons/` or `~/.config/cognilite/neurons/`
+- **Tool execution loop** — the model emits `<tool>command</tool>` tags; cognilite intercepts, runs the command, injects the result, and resumes the stream automatically
+- **KV cache warm-up** — on model selection, pre-fills the KV cache with the system prompt so the first message skips full re-evaluation (critical on CPU-only hardware)
+- **Context window tracking** — header shows `ctx X% / Nk`; warnings at 80%, 90%, and 100%
+- **Token stats** — after each response: `tok/s · response tokens · prompt eval · wall time`; thinking models also show a "thought for Xs" label
+- **Input history** — `↑` / `↓` navigates previously sent messages; draft is preserved when browsing history
+- **Multiline input** — `Ctrl+N` inserts a newline; input box grows automatically; full readline-style editing
+- **Paste support** — multiline paste from clipboard; newlines preserved
 - **Stop generation** — `Esc` while streaming cancels the current response
-- **Settings screen** — configure context strategy and enable/disable neurons; persisted to `~/.config/cognilite/config.json`
-- **TTY compatible** — no kitty protocol, no sixel, degrades gracefully on any terminal
+- **Settings screen** — four tabs: context strategy, neurons, generation parameters, performance flags; persisted to `~/.config/cognilite/config.json`
+- **TTY compatible** — no kitty protocol, no sixel; degrades gracefully on any terminal
 
 ## Requirements
 
@@ -70,20 +72,25 @@ cargo build --release
 
 | Key | Action |
 |-----|--------|
-| `↑` / `k` | Move cursor up |
-| `↓` / `j` | Move cursor down |
+| `↑` / `↓` | Move cursor up / down |
 | `Enter` | Select model and open chat |
+| `Type` | Filter models (search textbox) |
+| `Backspace` | Delete last search character |
+| `Esc` | Clear search filter |
 | `Tab` | Open settings |
-| `q` / `Ctrl+C` | Quit |
+| `Ctrl+C` | Quit |
 
 ### Settings screen
 
 | Key | Action |
 |-----|--------|
-| `↑` / `k` | Move cursor up |
-| `↓` / `j` | Move cursor down |
-| `Enter` | Confirm selection |
-| `Tab` | Switch between sections |
+| `↑` / `↓` | Navigate items |
+| `Enter` / `Space` | Toggle option (Context, Neurons, Performance tabs) |
+| `←` / `→` | Decrease / increase value (Generation tab) |
+| `r` | Reset to default (Generation tab) |
+| `Type` | Filter items in current tab |
+| `Backspace` | Delete last filter character |
+| `Tab` | Switch to next tab |
 | `Esc` | Close and return to model select |
 | `Ctrl+C` | Quit |
 
@@ -180,7 +187,7 @@ Type `@` followed by a file path anywhere in your message:
 
 **Images** are sent as base64 in the `images` field (for vision models). Supported extensions: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`.
 
-**Size limit:** no arbitrary byte limit — a file is rejected only if its estimated token cost (~bytes/4) exceeds the remaining context window. If the model's context length is unknown, all files are allowed. Rejection shows an inline error:
+**Size limit:** a file is rejected only if its estimated token cost (~bytes/4) exceeds the remaining context window. Rejection shows an inline error:
 ```
 [app.rs is too large for the current context (~8200 tokens needed, 3100 remaining of 131k)]
 ```
@@ -191,20 +198,26 @@ Type `@` followed by a file path anywhere in your message:
 
 Neurons are groups of capabilities loaded at startup. Each neuron can contain:
 
-- **Synapses** — specific tools the model can invoke by wrapping a command in `<tool>` tags
 - **Thoughts** — markdown files injected into the system prompt that shape how the model reasons
+- **Synapses** — specific tools the model can invoke by wrapping a command in `<tool>` tags
 - **Shell passthrough** — a neuron with `shell = true` lets the model run any shell command directly
 
-When the model outputs `<tool>command args</tool>`, cognilite intercepts the tag, runs the command in the working directory, injects the result as `Tool result:`, and resumes the stream so the model can continue with the output in context.
+When the model outputs `<tool>command args</tool>`, cognilite intercepts the tag, runs the command via `sh -c` in the working directory, injects the result as `Tool result:`, and resumes the stream so the model can continue with the output in context.
 
-### Built-in neurons
+### Bundled neurons
+
+cognilite ships with a set of neurons in `.cognilite/neurons/` that are loaded automatically when run from the project directory:
 
 | Neuron | Description |
 |--------|-------------|
-| `Knowledge` | Self-awareness: how cognilite works, tool execution flow, transparency rules |
-| `Shell` | Shell passthrough — runs shell commands (`ls`, `cat`, `grep`, `find`, …) |
+| `Cortex` | Project-level awareness: architecture, conventions, current development goals |
+| `Axon` | Code navigation and search — `grep`, `find` across the codebase |
+| `Efferent` | Shell passthrough (`shell = true`) — runs any Linux command |
+| `Engram` | Transparency and self-knowledge; rules about when to run commands |
+| `Gyrus` | Git workflow — inspect history, staged changes, working tree status |
+| `Synapse` | Tool call protocol — defines how the model emits commands and reads results |
 
-Neurons can be enabled or disabled individually from the settings screen (`Tab` on model select). The selection persists across sessions.
+Neurons can be enabled or disabled individually from the Settings screen. The selection persists across sessions.
 
 ### Adding a neuron
 
@@ -221,50 +234,75 @@ Create a directory under `.cognilite/neurons/<name>/` in your project (or `~/.co
 
 **`neuron.toml`:**
 ```toml
-name = "Git"
-description = "Run git commands to inspect the repository"
+name = Git
+description = Run git commands to inspect the repository
 ```
 
 **`synapses/git-log.toml`:**
 ```toml
-trigger = "git-log"
-kind = "tool"
-command = "git log --oneline -20"
-description = "Show the last 20 commits"
-usage = "git-log"
+trigger = git-log
+kind = tool
+command = git log --oneline -20
+description = Show the last 20 commits
+usage = git-log
+
+---
+Assistant: <tool>git-log</tool>
+Tool result:
+abc1234 feat: add streaming support
+...
 ```
 
 **Shell passthrough** (run any command, no synapse files needed):
 ```toml
-name = "Shell"
-description = "Execute shell commands"
+name = Shell
+description = Execute shell commands
 shell = true
 ```
 
 ### Neuron loading order
 
-1. **Built-ins** — embedded in the binary at compile time
-2. **Project-local** — `.cognilite/neurons/` in the working directory
-3. **User-global** — `~/.config/cognilite/neurons/`
+1. **Project-local** — `.cognilite/neurons/` in the working directory
+2. **User-global** — `~/.config/cognilite/neurons/`
 
-Later entries with the same trigger override earlier ones.
+Later entries with the same name extend the neuron list; triggers are matched in order.
 
 ## Settings
 
 Open with `Tab` from the model select screen. Settings persist to `~/.config/cognilite/config.json`.
 
-### Context strategy
+### Context tab
 
 Controls how much of the model's context window Ollama allocates per request.
 
 | Strategy | Behavior |
 |----------|----------|
-| **Dynamic** (default) | Allocates `max(8192, used_tokens × 2)` tokens — grows with the conversation, faster startup |
-| **Full** | Always allocates the model's maximum context window — slower but never truncates long histories |
+| **Dynamic** (default) | Allocates `max(8192, used_tokens × 2)` — grows with the conversation, faster startup |
+| **Full** | Always allocates the model's maximum context window — never truncates long histories |
 
-### Neuron selector
+### Neurons tab
 
-Toggle individual neurons on or off. Disabled neurons are excluded from the system prompt when a model is selected. Use `Tab` to switch between the Context strategy and Neurons sections.
+Toggle individual neurons on or off. Disabled neurons are excluded from the system prompt when a model is selected.
+
+### Generation tab
+
+Tune sampling parameters per session:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `temperature` | 0.8 | Randomness of output |
+| `top_p` | 0.9 | Nucleus sampling cutoff |
+| `repeat_penalty` | 1.1 | Repetition penalty |
+
+Use `←` / `→` to adjust, `r` to reset to default.
+
+### Performance tab
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| **Stable num_ctx** | on | Rounds context window to powers of 2 to preserve KV cache across requests |
+| **Keep model alive** | off | Passes `keep_alive: -1` to Ollama — prevents the model from being unloaded between requests |
+| **Warm-up cache** | on | Pre-fills KV cache with the system prompt on model load — significantly reduces first-message latency |
 
 ## Context Window
 
@@ -287,14 +325,10 @@ In-chat warnings appear at:
 src/
 ├── main.rs        — entry point, event loop, model loading
 ├── app.rs         — App state, message types, input editing, attachment resolution, tool loop
-├── synapse.rs     — Neuron/Synapse types, built-in loading, tool context builder, .toml parser
+├── synapse.rs     — Neuron/Synapse types, directory loader, tool context builder, .toml parser
 ├── events.rs      — key event dispatch (config / model select / chat)
-├── ollama.rs      — Ollama API: list_models, stream_chat, fetch_context_length
-└── ui.rs          — ratatui rendering: config, model select, chat, markdown, code blocks, popups
-
-neurons/
-├── knowledge/     — built-in Knowledge neuron (thoughts injected as system prompt)
-└── shell/         — built-in Shell neuron (shell passthrough)
+├── ollama.rs      — Ollama API: list_models, fetch_context_length, stream_chat, warmup
+└── ui.rs          — ratatui rendering: shared page_layout, config, model select, chat, popups
 ```
 
 ### Key types (`app.rs`)
@@ -304,13 +338,14 @@ struct App {
     screen: Screen,              // Config | ModelSelect | Chat
     ctx_strategy: CtxStrategy,  // Dynamic | Full
     disabled_neurons: HashSet<String>,
+    gen_params: [f64; 3],        // temperature, top_p, repeat_penalty
     messages: Vec<Message>,
     input: String,
     cursor_pos: usize,
     input_history: Vec<String>,
-    history_pos: Option<usize>,
     stream_state: StreamState,   // Idle | Streaming | Error(String)
     stream_rx: Option<Receiver<StreamChunk>>,
+    warmup_rx: Option<Receiver<()>>,
     used_tokens: u64,
     context_length: Option<u64>,
     working_dir: PathBuf,
@@ -319,22 +354,23 @@ struct App {
     tool_context: String,        // built at model selection from enabled neurons
 }
 
-struct Neuron {
-    name: String,
-    description: String,
-    shell: bool,                 // true → any trigger runs as a shell command
-    system_prompt: String,       // concatenated thoughts
-    synapses: Vec<Synapse>,
-}
-
 struct Message {
     role: Role,              // User | Assistant | Tool
-    content: String,         // display text
-    llm_content: String,     // sent to the model (includes file bodies / tool results)
+    content: String,         // display text (tool tags and file bodies stripped)
+    llm_content: String,     // sent to the model (full content preserved)
     images: Vec<String>,     // base64-encoded images
     attachments: Vec<Attachment>,
-    thinking: String,
-    stats: Option<TokenStats>, // wall_secs, tok/s, token counts
+    thinking: String,        // thinking block content
+    stats: Option<TokenStats>,
+    tool_call: Option<String>, // "Neuron › trigger" label for Role::Tool messages
+}
+
+struct TokenStats {
+    response_tokens: u64,
+    tokens_per_sec: f64,
+    thinking_secs: Option<f64>, // duration until first content token
+    wall_secs: f64,
+    prompt_eval_count: u64,     // tokens Ollama re-evaluated (0 = cache hit)
 }
 ```
 
@@ -344,14 +380,12 @@ A background thread spawned by `start_stream()` reads the NDJSON stream from `/a
 
 `poll_stream` scans the accumulated assistant content for a complete `<tool>...</tool>` tag after each chunk. When found:
 
-1. The tag is stripped from the display content
+1. The tag is stripped from the display content (`llm_content` keeps it so the model sees its own calls)
 2. The current stream is stopped
-3. `handle_tool_call` executes the tool and pushes a `Role::Tool` message with `llm_content = "Tool result:\n<result>"`
-4. `start_stream` restarts with the full conversation (including the tool result) so the model can continue
+3. `handle_tool_call` executes the command and pushes a `Role::Tool` message
+4. `start_stream` restarts with the full conversation so the model can continue
 
 Tool messages are sent to Ollama as `"user"` role turns, compatible with base models that don't have a native tool-call protocol.
-
-Thinking models send a `message.thinking` field in early chunks before `message.content` begins. Both are accumulated separately and rendered in different colors.
 
 ### Ollama API calls
 
@@ -359,6 +393,5 @@ Thinking models send a `message.thinking` field in early chunks before `message.
 |----------|----------|------|
 | `list_models` | `GET /api/tags` | Startup |
 | `fetch_context_length` | `POST /api/show` | After model selection |
+| `warmup` | `POST /api/chat` | After model selection (if warm-up enabled) |
 | `stream_chat` | `POST /api/chat` | Each message send / tool round-trip |
-
-`stream_chat` passes `num_ctx` in the request options according to the active context strategy.

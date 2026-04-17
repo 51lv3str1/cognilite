@@ -184,6 +184,7 @@ pub struct App {
     pub content_lines: u16,
     pub stream_state: StreamState,
     pub stream_rx: Option<mpsc::Receiver<StreamChunk>>,
+    pub warmup_rx: Option<mpsc::Receiver<()>>,
     pub stream_started_at: Option<std::time::Instant>,
     pub thinking_end_secs: Option<f64>, // captured when first content token arrives
     pub completion: Option<Completion>,
@@ -234,6 +235,7 @@ impl App {
             content_lines: 0,
             stream_state: StreamState::Idle,
             stream_rx: None,
+            warmup_rx: None,
             stream_started_at: None,
             thinking_end_secs: None,
             completion: None,
@@ -343,8 +345,11 @@ impl App {
                 let model        = name.clone();
                 let tool_context = self.tool_context.clone();
                 let keep_alive   = self.keep_alive;
+                let (tx, rx) = mpsc::channel();
+                self.warmup_rx = Some(rx);
                 std::thread::spawn(move || {
                     crate::ollama::warmup(&base_url, model, tool_context, num_ctx, keep_alive);
+                    let _ = tx.send(());
                 });
             }
         }
@@ -445,6 +450,14 @@ impl App {
         std::thread::spawn(move || {
             crate::ollama::stream_chat(&base_url, model, chat_messages, num_ctx, gen_params, keep_alive, tx);
         });
+    }
+
+    pub fn poll_warmup(&mut self) {
+        if let Some(rx) = &self.warmup_rx {
+            if rx.try_recv().is_ok() {
+                self.warmup_rx = None;
+            }
+        }
     }
 
     pub fn poll_stream(&mut self) {

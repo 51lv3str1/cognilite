@@ -394,6 +394,9 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         Span::styled(model_name, Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
         stream_indicator,
     ];
+    if app.warmup_rx.is_some() {
+        header_spans.push(Span::styled("⟳ caching ", Style::default().fg(DIM)));
+    }
 
     if let Some(ctx_len) = app.context_length {
         if ctx_len > 0 {

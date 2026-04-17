@@ -39,6 +39,7 @@ fn load_models(app: &mut App) {
 
 fn run_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> color_eyre::Result<()> {
     loop {
+        app.poll_warmup();
         app.poll_stream();
         terminal.draw(|frame| ui::draw(frame, app))?;
 

@@ -639,16 +639,11 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     if warming_up {
         if let Some(started) = app.warmup_started_at {
             let elapsed = started.elapsed().as_secs_f64();
-            let estimated_tokens = (app.tool_context.len() / 4).max(1) as f64;
-            let estimated_secs   = (estimated_tokens / 3.0).max(1.0); // ~3 tok/s on CPU
-            let pct = ((elapsed / estimated_secs) * 100.0).min(95.0) as u8;
-            let bar_width: usize = 20;
-            let filled = (bar_width * pct as usize / 100).min(bar_width);
-            let bar: String = "▓".repeat(filled) + &"░".repeat(bar_width - filled);
+            const SPINNER: &[&str] = &["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+            let frame_i = (elapsed / 0.1) as usize % SPINNER.len();
             frame.render_widget(Paragraph::new(Line::from(vec![
-                Span::styled("  ⟳ warming up KV cache  ", Style::default().fg(DIM)),
-                Span::styled(format!("[{bar}]"), Style::default().fg(THINKING_COLOR)),
-                Span::styled(format!("  {pct}%"), Style::default().fg(DIM)),
+                Span::styled(format!("  {} ", SPINNER[frame_i]), Style::default().fg(ACCENT)),
+                Span::styled("warming up KV cache", Style::default().fg(DIM)),
                 Span::styled(format!("  {elapsed:.1}s"), Style::default().fg(THINKING_COLOR)),
             ])), chunks[2]);
         }

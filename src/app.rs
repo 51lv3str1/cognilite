@@ -226,7 +226,7 @@ impl App {
             thinking_end_secs: None,
             completion: None,
             neurons: {
-                let mut n = crate::synapse::built_ins();
+                let mut n = Vec::new();
                 let local = std::env::current_dir()
                     .unwrap_or_else(|_| std::path::PathBuf::from("."))
                     .join(".cognilite/neurons");
@@ -369,7 +369,7 @@ impl App {
             CtxStrategy::Full => self.context_length,
             CtxStrategy::Dynamic => self.context_length.map(|max| {
                 let needed = (self.used_tokens * 2).max(8192);
-                needed.min(max)
+                needed.next_power_of_two().min(max)
             }),
         };
 

@@ -22,24 +22,6 @@ pub struct Neuron {
     pub synapses: Vec<Synapse>,
 }
 
-// Built-in neurons embedded at compile time
-const BUILTIN_SHELL_META: &str         = include_str!("../neurons/shell/neuron.toml");
-const BUILTIN_SHELL_THOUGHTS: &[&str]  = &[
-    include_str!("../neurons/shell/thoughts/rules.md"),
-];
-const BUILTIN_KNOWLEDGE_META: &str        = include_str!("../neurons/knowledge/neuron.toml");
-const BUILTIN_KNOWLEDGE_THOUGHTS: &[&str] = &[
-    include_str!("../neurons/knowledge/thoughts/knowledge.md"),
-    include_str!("../neurons/knowledge/thoughts/transparency.md"),
-];
-
-pub fn built_ins() -> Vec<Neuron> {
-    vec![
-        parse_neuron(BUILTIN_KNOWLEDGE_META, BUILTIN_KNOWLEDGE_THOUGHTS, &[]),
-        parse_neuron(BUILTIN_SHELL_META,     BUILTIN_SHELL_THOUGHTS,     &[]),
-    ]
-}
-
 /// Scans `base` for subdirectories, each treated as a neuron.
 /// Each subdirectory may contain:
 ///   - `neuron.toml`       — name and description
@@ -121,11 +103,8 @@ pub fn build_tool_context(neurons: &[&Neuron]) -> String {
             out.push_str(" — ");
             out.push_str(&neuron.description);
         }
-        out.push_str(":\n");
+        out.push('\n');
 
-        if neuron.shell {
-            out.push_str("  To run a shell command, wrap it in a tool tag. For example: <tool>ls</tool> or <tool>cat README.md</tool>\n");
-        }
         for s in &neuron.synapses {
             let SynapseKind::Tool { usage, .. } = &s.kind;
             out.push_str(&format!("  - {}: {}\n", usage, s.description));
@@ -134,11 +113,6 @@ pub fn build_tool_context(neurons: &[&Neuron]) -> String {
             out.push_str(&format!("  {}\n", neuron.system_prompt.trim()));
         }
     }
-
-    out.push_str(
-        "\nWhen you need to run a command, output it on its own line wrapped in tool tags.\n\
-         You will receive the result under \"Tool result:\" and can then continue.\n",
-    );
 
     // examples: neuron-level first, then per-synapse
     let mut examples: Vec<&str> = Vec::new();

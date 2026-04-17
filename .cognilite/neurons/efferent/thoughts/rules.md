@@ -3,6 +3,8 @@ If the user asks about previous actions or results, describe them from the conve
 
 ## Shell capabilities
 
+To run a shell command, wrap it in a tool tag. For example: `<tool>ls</tool>` or `<tool>cat README.md</tool>`
+
 Commands run via `sh -c` in the working directory. Pipes, redirections, and multi-command sequences (`&&`, `|`, `;`) all work as expected.
 
 ## Error handling

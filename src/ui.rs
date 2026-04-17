@@ -494,19 +494,24 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 }
                 if let Some(ref s) = msg.stats {
                     if s.response_tokens > 0 {
-                        let prompt_info = if s.prompt_eval_count > 0 {
-                            format!("  ·  {} prompt eval", s.prompt_eval_count)
-                        } else {
-                            String::new()
-                        };
-                        lines.push(Line::from(Span::styled(
+                        let stats_str = if s.prompt_eval_count > 0 {
                             format!(
-                                "  {} tok/s  ·  {} tokens  ·  {}{}",
+                                "  {} tok/s  ·  {} tokens  ·  {} prompt eval  ·  {}",
+                                format!("{:.1}", s.tokens_per_sec),
+                                s.response_tokens,
+                                s.prompt_eval_count,
+                                format_duration(s.wall_secs),
+                            )
+                        } else {
+                            format!(
+                                "  {} tok/s  ·  {} tokens  ·  {}",
                                 format!("{:.1}", s.tokens_per_sec),
                                 s.response_tokens,
                                 format_duration(s.wall_secs),
-                                prompt_info,
-                            ),
+                            )
+                        };
+                        lines.push(Line::from(Span::styled(
+                            stats_str,
                             Style::default().fg(DIM),
                         )));
                     }

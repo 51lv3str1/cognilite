@@ -86,7 +86,7 @@ fn handle_config(app: &mut App, key: KeyEvent) {
                 if app.perf_cursor > 0 { app.perf_cursor -= 1; }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if app.perf_cursor + 1 < 2 { app.perf_cursor += 1; }
+                if app.perf_cursor + 1 < 3 { app.perf_cursor += 1; }
             }
             KeyCode::Enter | KeyCode::Char(' ') => app.toggle_perf(app.perf_cursor),
             _ => {}

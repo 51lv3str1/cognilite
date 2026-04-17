@@ -47,10 +47,11 @@ pub struct Config {
     pub gen_params: [f64; 3],
     pub ctx_pow2: bool,
     pub keep_alive: bool,
+    pub warmup: bool,
 }
 
 pub fn load_config() -> Config {
-    let default = Config { ctx_strategy: CtxStrategy::Dynamic, disabled_neurons: Default::default(), gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2], ctx_pow2: true, keep_alive: false };
+    let default = Config { ctx_strategy: CtxStrategy::Dynamic, disabled_neurons: Default::default(), gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2], ctx_pow2: true, keep_alive: false, warmup: true };
     let path = match config_path() { Some(p) => p, None => return default };
     let Ok(text) = std::fs::read_to_string(&path) else { return default };
     let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else { return default };
@@ -69,10 +70,11 @@ pub fn load_config() -> Config {
     ];
     let ctx_pow2   = val.get("ctx_pow2").and_then(|v| v.as_bool()).unwrap_or(true);
     let keep_alive = val.get("keep_alive").and_then(|v| v.as_bool()).unwrap_or(false);
-    Config { ctx_strategy, disabled_neurons, gen_params, ctx_pow2, keep_alive }
+    let warmup     = val.get("warmup").and_then(|v| v.as_bool()).unwrap_or(true);
+    Config { ctx_strategy, disabled_neurons, gen_params, ctx_pow2, keep_alive, warmup }
 }
 
-pub fn save_config(strategy: &CtxStrategy, disabled_neurons: &std::collections::HashSet<String>, gen_params: &[f64; 3], ctx_pow2: bool, keep_alive: bool) {
+pub fn save_config(strategy: &CtxStrategy, disabled_neurons: &std::collections::HashSet<String>, gen_params: &[f64; 3], ctx_pow2: bool, keep_alive: bool, warmup: bool) {
     let Some(path) = config_path() else { return };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -86,6 +88,7 @@ pub fn save_config(strategy: &CtxStrategy, disabled_neurons: &std::collections::
         "repeat_penalty": gen_params[2],
         "ctx_pow2": ctx_pow2,
         "keep_alive": keep_alive,
+        "warmup": warmup,
     });
     let _ = std::fs::write(&path, json.to_string());
 }
@@ -166,6 +169,7 @@ pub struct App {
     pub disabled_neurons: std::collections::HashSet<String>,
     pub ctx_pow2: bool,
     pub keep_alive: bool,
+    pub warmup: bool,
     pub perf_cursor: usize,
     // model select
     pub models: Vec<ModelEntry>,
@@ -219,6 +223,7 @@ impl App {
             disabled_neurons: cfg.disabled_neurons,
             ctx_pow2: cfg.ctx_pow2,
             keep_alive: cfg.keep_alive,
+            warmup: cfg.warmup,
             perf_cursor: 0,
             models: Vec::new(),
             model_cursor: 0,
@@ -266,16 +271,17 @@ impl App {
 
     pub fn confirm_config(&mut self) {
         self.ctx_strategy = CtxStrategy::from_index(self.config_cursor);
-        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive);
+        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive, self.warmup);
     }
 
     pub fn toggle_perf(&mut self, index: usize) {
         match index {
             0 => self.ctx_pow2   = !self.ctx_pow2,
             1 => self.keep_alive = !self.keep_alive,
+            2 => self.warmup     = !self.warmup,
             _ => {}
         }
-        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive);
+        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive, self.warmup);
     }
 
     pub fn toggle_neuron(&mut self) {
@@ -286,7 +292,7 @@ impl App {
             } else {
                 self.disabled_neurons.insert(name);
             }
-            save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive);
+            save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive, self.warmup);
         }
     }
 
@@ -295,12 +301,12 @@ impl App {
         let v = &mut self.gen_params[self.param_cursor];
         *v = (*v + direction * step).clamp(min, max);
         *v = (*v * 100.0).round() / 100.0;
-        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive);
+        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive, self.warmup);
     }
 
     pub fn param_reset(&mut self) {
         self.gen_params[self.param_cursor] = GEN_PARAMS[self.param_cursor].2;
-        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive);
+        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive, self.warmup);
     }
 
     pub fn toggle_config(&mut self) {
@@ -333,7 +339,7 @@ impl App {
             self.stream_state = StreamState::Idle;
             self.screen = Screen::Chat;
 
-            if !self.tool_context.is_empty() {
+            if self.warmup && !self.tool_context.is_empty() {
                 let num_ctx = match self.ctx_strategy {
                     CtxStrategy::Full => self.context_length,
                     CtxStrategy::Dynamic => self.context_length.map(|max| {

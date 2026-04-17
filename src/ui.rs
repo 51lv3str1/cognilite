@@ -36,8 +36,8 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let neuron_h: u16 = app.neurons.len().max(1) as u16 + 2;
     // generation params box: 1 line per param + borders
     let gen_h: u16 = crate::app::GEN_PARAMS.len() as u16 + 2;
-    // performance box: 2 toggles + borders
-    let perf_h: u16 = 4;
+    // performance box: 3 toggles + borders
+    let perf_h: u16 = 5;
     // gap between boxes
     let gap: u16 = 1;
 
@@ -186,6 +186,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let perf_options = [
         PerfOption { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache", value: app.ctx_pow2   },
         PerfOption { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",  value: app.keep_alive },
+        PerfOption { label: "Warm-up cache",    desc: "Pre-fill KV cache with the system prompt on model load",    value: app.warmup     },
     ];
 
     let perf_focused = app.config_section == 3;

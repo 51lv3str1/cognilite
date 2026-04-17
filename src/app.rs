@@ -189,6 +189,7 @@ pub struct App {
     pub stream_state: StreamState,
     pub stream_rx: Option<mpsc::Receiver<StreamChunk>>,
     pub warmup_rx: Option<mpsc::Receiver<()>>,
+    pub warmup_started_at: Option<std::time::Instant>,
     pub stream_started_at: Option<std::time::Instant>,
     pub thinking_end_secs: Option<f64>, // captured when first content token arrives
     pub completion: Option<Completion>,
@@ -241,6 +242,7 @@ impl App {
             stream_state: StreamState::Idle,
             stream_rx: None,
             warmup_rx: None,
+            warmup_started_at: None,
             stream_started_at: None,
             thinking_end_secs: None,
             completion: None,
@@ -353,6 +355,7 @@ impl App {
                 let keep_alive   = self.keep_alive;
                 let (tx, rx) = mpsc::channel();
                 self.warmup_rx = Some(rx);
+                self.warmup_started_at = Some(std::time::Instant::now());
                 std::thread::spawn(move || {
                     crate::ollama::warmup(&base_url, model, tool_context, num_ctx, keep_alive);
                     let _ = tx.send(());
@@ -462,6 +465,7 @@ impl App {
         if let Some(rx) = &self.warmup_rx {
             if rx.try_recv().is_ok() {
                 self.warmup_rx = None;
+                self.warmup_started_at = None;
             }
         }
     }

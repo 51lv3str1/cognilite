@@ -338,13 +338,15 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     // +2 for borders; account for visual wrapping (area.width - 4 = borders(2) + prefix(2))
     let input_inner_width = area.width.saturating_sub(4);
     let input_height = (visual_line_count(&app.input, input_inner_width) + 2).min(10);
+    let warming_up = app.warmup_rx.is_some();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),              // header
-            Constraint::Fill(1),                // messages
-            Constraint::Length(input_height),   // input (dynamic)
-            Constraint::Length(1),              // hints
+            Constraint::Length(1),                                    // header
+            Constraint::Fill(1),                                      // messages
+            Constraint::Length(if warming_up { 1 } else { 0 }),      // warmup status bar
+            Constraint::Length(input_height),                         // input (dynamic)
+            Constraint::Length(1),                                    // hints
         ])
         .split(area);
 
@@ -361,10 +363,6 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         Span::styled(model_name, Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
         stream_indicator,
     ];
-    if app.warmup_rx.is_some() {
-        header_spans.push(Span::styled("⟳ caching ", Style::default().fg(DIM)));
-    }
-
     if let Some(ctx_len) = app.context_length {
         if ctx_len > 0 {
             let ctx_k = ctx_len / 1000;
@@ -638,7 +636,26 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
 
         Paragraph::new(Text::from(text_lines)).block(input_block)
     };
-    frame.render_widget(input_widget, chunks[2]);
+    // --- warmup status bar ---
+    if warming_up {
+        if let Some(started) = app.warmup_started_at {
+            let elapsed = started.elapsed().as_secs_f64();
+            let estimated_tokens = (app.tool_context.len() / 4).max(1) as f64;
+            let estimated_secs   = (estimated_tokens / 3.0).max(1.0); // ~3 tok/s on CPU
+            let pct = ((elapsed / estimated_secs) * 100.0).min(95.0) as u8;
+            let bar_width: usize = 20;
+            let filled = (bar_width * pct as usize / 100).min(bar_width);
+            let bar: String = "▓".repeat(filled) + &"░".repeat(bar_width - filled);
+            frame.render_widget(Paragraph::new(Line::from(vec![
+                Span::styled("  ⟳ warming up KV cache  ", Style::default().fg(DIM)),
+                Span::styled(format!("[{bar}]"), Style::default().fg(THINKING_COLOR)),
+                Span::styled(format!("  {pct}%"), Style::default().fg(DIM)),
+                Span::styled(format!("  {elapsed:.1}s"), Style::default().fg(THINKING_COLOR)),
+            ])), chunks[2]);
+        }
+    }
+
+    frame.render_widget(input_widget, chunks[3]);
 
     // place cursor in 2D using visual coordinates
     if app.stream_state != StreamState::Streaming {
@@ -647,14 +664,14 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         let input_scroll = vcur_row.saturating_sub(visible_rows.saturating_sub(1));
         let visual_row = vcur_row - input_scroll;
         let prefix_len: u16 = 2; // "> " or "  "
-        let x = chunks[2].x + 1 + prefix_len + vcur_col as u16;
-        let y = chunks[2].y + 1 + visual_row as u16;
-        frame.set_cursor_position((x.min(chunks[2].x + chunks[2].width - 2), y));
+        let x = chunks[3].x + 1 + prefix_len + vcur_col as u16;
+        let y = chunks[3].y + 1 + visual_row as u16;
+        frame.set_cursor_position((x.min(chunks[3].x + chunks[3].width - 2), y));
     }
 
     // --- completion popup ---
     if app.completion.is_some() {
-        draw_completion_popup(frame, app, chunks[2]);
+        draw_completion_popup(frame, app, chunks[3]);
     }
 
     // --- hints ---
@@ -669,7 +686,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         hint("F1", "help"),
     ]))
     .style(Style::default().fg(DIM));
-    frame.render_widget(hints, chunks[3]);
+    frame.render_widget(hints, chunks[4]);
 
     // --- help popup ---
     if app.show_help {

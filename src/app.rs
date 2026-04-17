@@ -115,6 +115,7 @@ pub struct TokenStats {
     pub tokens_per_sec: f64,
     pub thinking_secs: Option<f64>, // time until first content token (thinking phase only)
     pub wall_secs: f64,             // total wall-clock time from send to done
+    pub prompt_eval_count: u64,     // tokens Ollama actually re-evaluated (0 = cache hit)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -570,6 +571,7 @@ impl App {
                                     response_tokens: et,
                                     tokens_per_sec: tps,
                                     thinking_secs: self.thinking_end_secs,
+                                    prompt_eval_count: pt,
                                     wall_secs,
                                 });
                             }

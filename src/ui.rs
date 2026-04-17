@@ -494,12 +494,18 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 }
                 if let Some(ref s) = msg.stats {
                     if s.response_tokens > 0 {
+                        let prompt_info = if s.prompt_eval_count > 0 {
+                            format!("  ·  {} prompt eval", s.prompt_eval_count)
+                        } else {
+                            String::new()
+                        };
                         lines.push(Line::from(Span::styled(
                             format!(
-                                "  {} tok/s  ·  {} tokens  ·  {}",
+                                "  {} tok/s  ·  {} tokens  ·  {}{}",
                                 format!("{:.1}", s.tokens_per_sec),
                                 s.response_tokens,
                                 format_duration(s.wall_secs),
+                                prompt_info,
                             ),
                             Style::default().fg(DIM),
                         )));

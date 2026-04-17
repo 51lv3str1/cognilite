@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
-use crate::app::{App, CtxStrategy, Role, Screen, StreamState};
+use crate::app::{App, ChatFocus, CtxStrategy, Role, Screen, StreamState};
 
 const ACCENT: Color = Color::Rgb(137, 180, 250);  // blue
 const USER_COLOR: Color = Color::Rgb(166, 227, 161); // green
@@ -437,17 +437,28 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     // --- messages ---
     let msg_area = chunks[1];
     let inner_width = msg_area.width.saturating_sub(4) as usize; // borders + padding
+    let history_mode = app.chat_focus == ChatFocus::History;
 
     let mut lines: Vec<Line> = Vec::new();
+    let mut selected_line: Option<u16> = None;
     lines.push(Line::raw(""));
 
-    for msg in &app.messages {
+    for (msg_idx, msg) in app.messages.iter().enumerate() {
+        let is_selected = history_mode && msg_idx == app.history_cursor;
         match msg.role {
             Role::User => {
-                lines.push(Line::from(Span::styled(
-                    "You",
-                    Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD),
-                )));
+                if is_selected { selected_line = Some(lines.len() as u16); }
+                let copy_hint = if is_selected {
+                    Span::styled("  ⎘", Style::default().fg(ACCENT))
+                } else {
+                    Span::raw("")
+                };
+                let prefix = if is_selected {
+                    Span::styled("► You", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD))
+                } else {
+                    Span::styled("You", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD))
+                };
+                lines.push(Line::from(vec![prefix, copy_hint]));
                 // show message text (with @refs stripped to just the filename)
                 let display = clean_at_refs(&msg.content);
                 for text_line in wrap_text(&display, inner_width) {
@@ -477,6 +488,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 }
             }
             Role::Tool => {
+                if is_selected { selected_line = Some(lines.len() as u16); }
                 if msg.attachments.is_empty() {
                     lines.push(Line::from(vec![
                         Span::styled("  ✗ ", Style::default().fg(ERROR_COLOR)),
@@ -490,10 +502,11 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                         format!("{} B", att.size)
                     };
                     let label = msg.tool_call.as_deref().unwrap_or("tool");
+                    let copy_hint = if is_selected { "  ⎘" } else { "" };
                     lines.push(Line::from(vec![
                         Span::styled(format!("  ⚙ {label}  "), Style::default().fg(DIM)),
                         Span::styled(att.filename.clone(), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("  {size_str}"), Style::default().fg(DIM)),
+                        Span::styled(format!("  {size_str}{copy_hint}"), Style::default().fg(DIM)),
                     ]));
                     for code_line in msg.content.lines() {
                         let truncated: String = code_line.chars().take(inner_width.saturating_sub(4)).collect();
@@ -505,7 +518,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 }
             }
             Role::Assistant => {
-                let is_last = std::ptr::eq(msg, app.messages.last().unwrap());
+                let is_last = msg_idx == app.messages.len() - 1;
                 let streaming = is_last && app.stream_state == StreamState::Streaming;
 
                 // intermediate assistant messages that only held a tool call
@@ -514,10 +527,17 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                     continue;
                 }
 
-                lines.push(Line::from(Span::styled(
-                    "Assistant",
-                    Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD),
-                )));
+                if is_selected { selected_line = Some(lines.len() as u16); }
+                let copy_hint = if is_selected {
+                    Span::styled("  ⎘", Style::default().fg(ACCENT))
+                } else {
+                    Span::raw("")
+                };
+                let label = if is_selected { "► Assistant" } else { "Assistant" };
+                lines.push(Line::from(vec![
+                    Span::styled(label, Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
+                    copy_hint,
+                ]));
                 if msg.content.is_empty() && msg.thinking.is_empty() {
                     // only the current streaming message reaches here
                     let label = match app.stream_started_at {
@@ -626,6 +646,14 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     let visible_height = msg_area.height.saturating_sub(2);
     if app.auto_scroll {
         app.scroll = total_lines.saturating_sub(visible_height);
+    } else if let Some(sel) = selected_line {
+        // keep selected block in view
+        if sel < app.scroll {
+            app.scroll = sel.saturating_sub(1);
+        } else if sel >= app.scroll + visible_height {
+            app.scroll = sel + 1 - visible_height;
+        }
+        app.scroll = app.scroll.min(total_lines.saturating_sub(1));
     } else {
         app.scroll = app.scroll.min(total_lines.saturating_sub(1));
     }
@@ -633,7 +661,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     let msg_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(SURFACE))
+        .border_style(Style::default().fg(if history_mode { ACCENT } else { SURFACE }))
         .style(Style::default().bg(BG));
 
     let messages_widget = Paragraph::new(Text::from(lines))
@@ -645,11 +673,9 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     let input_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if app.stream_state == StreamState::Streaming {
-            DIM
-        } else {
-            ACCENT
-        }))
+        .border_style(Style::default().fg(
+            if app.stream_state == StreamState::Streaming || history_mode { DIM } else { ACCENT }
+        ))
         .style(Style::default().bg(BG));
 
     let input_widget = if app.input.is_empty() && app.stream_state == StreamState::Streaming {
@@ -708,7 +734,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     frame.render_widget(input_widget, chunks[3]);
 
     // place cursor in 2D using visual coordinates
-    if app.stream_state != StreamState::Streaming {
+    if app.stream_state != StreamState::Streaming && !history_mode {
         let (vcur_row, vcur_col) = input_visual_cursor(&app.input, app.cursor_pos, input_inner_width);
         let visible_rows = (input_height - 2) as usize;
         let input_scroll = vcur_row.saturating_sub(visible_rows.saturating_sub(1));
@@ -725,17 +751,29 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     }
 
     // --- hints ---
-    let esc_label = if app.stream_state == StreamState::Streaming { "stop" } else { "models" };
-    let hints = Paragraph::new(Line::from(vec![
-        hint("Enter", "send"),
-        Span::raw("  "),
-        hint("Ctrl+N", "newline"),
-        Span::raw("  "),
-        hint("Esc", esc_label),
-        Span::raw("  "),
-        hint("F1", "help"),
-    ]))
-    .style(Style::default().fg(DIM));
+    let hints_line = if history_mode {
+        Line::from(vec![
+            hint("↑/↓", "navigate"),
+            Span::raw("  "),
+            hint("Ctrl+Y", "copy block"),
+            Span::raw("  "),
+            hint("Tab/Esc", "back to input"),
+        ])
+    } else {
+        let esc_label = if app.stream_state == StreamState::Streaming { "stop" } else { "models" };
+        Line::from(vec![
+            hint("Enter", "send"),
+            Span::raw("  "),
+            hint("Ctrl+N", "newline"),
+            Span::raw("  "),
+            hint("Esc", esc_label),
+            Span::raw("  "),
+            hint("Tab", "browse history"),
+            Span::raw("  "),
+            hint("F1", "help"),
+        ])
+    };
+    let hints = Paragraph::new(hints_line).style(Style::default().fg(DIM));
     frame.render_widget(hints, chunks[4]);
 
     // --- help popup ---
@@ -859,7 +897,8 @@ fn draw_help_popup(frame: &mut Frame, app: &App, area: Rect) {
             ("Ctrl+End",     "Jump to bottom"),
         ]),
         ("Chat", &[
-            ("Ctrl+Y",       "Copy last response to clipboard"),
+            ("Tab",          "Enter history mode — navigate & copy blocks"),
+            ("Ctrl+Y",       "Copy selected block (history) / last response (input)"),
             ("Ctrl+L",       "Clear conversation"),
             ("@path",        "Attach a file or image"),
             ("Ctrl+C",       "Quit"),

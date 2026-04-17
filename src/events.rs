@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use crate::app::{App, Screen, StreamState, fuzzy_match};
+use crate::app::{App, ChatFocus, Screen, StreamState, fuzzy_match};
 
 fn nav_prev(cursor: &mut usize, filtered: &[usize]) {
     if let Some(pos) = filtered.iter().position(|&i| i == *cursor) {
@@ -220,8 +220,24 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
     let ctrl  = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt   = key.modifiers.contains(KeyModifiers::ALT);
 
+    // History focus mode: navigate blocks, copy selected, Esc/Tab back to input
+    if app.chat_focus == ChatFocus::History {
+        match key.code {
+            KeyCode::Esc | KeyCode::Tab => {
+                app.chat_focus = ChatFocus::Input;
+                app.auto_scroll = true;
+            }
+            KeyCode::Up   => app.history_nav_prev(),
+            KeyCode::Down => app.history_nav_next(),
+            KeyCode::Char('y') if ctrl => app.copy_block(app.history_cursor),
+            _ => {}
+        }
+        return;
+    }
+
     match key.code {
         // ── send / cancel / navigate screens ────────────────────────────────
+        KeyCode::Tab    => app.enter_history_mode(),
         KeyCode::Enter  => app.send_message(),
         KeyCode::Esc => {
             if app.stream_state == StreamState::Streaming {

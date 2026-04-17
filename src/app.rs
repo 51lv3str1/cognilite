@@ -156,6 +156,12 @@ pub enum StreamState {
     Error(String),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChatFocus {
+    Input,
+    History,
+}
+
 #[derive(Debug)]
 pub struct Completion {
     pub candidates: Vec<String>, // completion strings (paths relative to working_dir or absolute)
@@ -216,6 +222,9 @@ pub struct App {
     pub show_help: bool,
     pub help_scroll: u16,
     pub copy_notice: Option<std::time::Instant>,
+    // chat focus / history navigation
+    pub chat_focus: ChatFocus,
+    pub history_cursor: usize, // index into messages[] for selected block
 }
 
 impl App {
@@ -280,6 +289,8 @@ impl App {
             show_help: false,
             help_scroll: 0,
             copy_notice: None,
+            chat_focus: ChatFocus::Input,
+            history_cursor: 0,
         }
     }
 
@@ -351,6 +362,8 @@ impl App {
             self.scroll = 0;
             self.auto_scroll = true;
             self.stream_state = StreamState::Idle;
+            self.chat_focus = ChatFocus::Input;
+            self.history_cursor = 0;
             self.screen = Screen::Chat;
 
             if self.warmup && !self.tool_context.is_empty() {
@@ -393,6 +406,7 @@ impl App {
         self.input.clear();
         self.cursor_pos = 0;
         self.completion = None;
+        self.chat_focus = ChatFocus::Input;
 
         let (display, llm_content, attachments, images) =
             resolve_attachments(&raw, &self.working_dir, self.context_length, self.used_tokens);
@@ -629,6 +643,52 @@ impl App {
             .map(|m| m.content.clone());
         if let Some(text) = text {
             if crate::clipboard::copy(&text) {
+                self.copy_notice = Some(std::time::Instant::now());
+            }
+        }
+    }
+
+    /// Returns message indices that are visible/navigable in History mode.
+    pub fn navigable_messages(&self) -> Vec<usize> {
+        self.messages.iter().enumerate()
+            .filter(|(_, m)| {
+                !(m.role == Role::Assistant && m.content.is_empty() && m.thinking.is_empty())
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    pub fn enter_history_mode(&mut self) {
+        let navigable = self.navigable_messages();
+        if !navigable.is_empty() {
+            self.history_cursor = *navigable.last().unwrap();
+            self.chat_focus = ChatFocus::History;
+            self.auto_scroll = false;
+        }
+    }
+
+    pub fn history_nav_prev(&mut self) {
+        let navigable = self.navigable_messages();
+        if let Some(pos) = navigable.iter().position(|&i| i == self.history_cursor) {
+            if pos > 0 {
+                self.history_cursor = navigable[pos - 1];
+            }
+        }
+    }
+
+    pub fn history_nav_next(&mut self) {
+        let navigable = self.navigable_messages();
+        if let Some(pos) = navigable.iter().position(|&i| i == self.history_cursor) {
+            if pos + 1 < navigable.len() {
+                self.history_cursor = navigable[pos + 1];
+            }
+        }
+    }
+
+    pub fn copy_block(&mut self, idx: usize) {
+        if let Some(msg) = self.messages.get(idx) {
+            let text = msg.content.clone();
+            if !text.is_empty() && crate::clipboard::copy(&text) {
                 self.copy_notice = Some(std::time::Instant::now());
             }
         }

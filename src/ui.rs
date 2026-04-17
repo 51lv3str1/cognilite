@@ -26,39 +26,56 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-// Centers a row to max 52 columns — for content boxes and title.
-fn centered_panel(row: Rect) -> Rect {
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Fill(1), Constraint::Max(52), Constraint::Fill(1)])
-        .split(row)[1]
+
+// Shared page skeleton: 1-row top pad · 3-row title · Fill content · 2-row hints.
+// Returns (title_area, content_area, hints_area).
+fn page_layout(area: Rect) -> (Rect, Rect, Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Fill(1),
+            Constraint::Length(2),
+        ])
+        .split(area);
+    (chunks[1], chunks[2], chunks[3])
 }
 
-// Renders the shared cognilite title with bottom border.
+// Renders the cognilite title with bottom border spanning the given area.
 fn render_title(frame: &mut Frame, area: Rect) {
     let title = Paragraph::new(Line::from(vec![
         Span::styled("cogni", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Span::styled("lite", Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
         Span::styled("  ·  ollama TUI", Style::default().fg(DIM)),
     ]))
+    .alignment(ratatui::layout::Alignment::Center)
     .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(SURFACE)));
-    frame.render_widget(title, centered_panel(area));
+    frame.render_widget(title, area);
 }
 
-fn render_search_bar(frame: &mut Frame, area: Rect, query: &str) {
-    let spans = if query.is_empty() {
-        vec![
-            Span::styled("  ❯ ", Style::default().fg(DIM)),
-            Span::styled("type to filter", Style::default().fg(THINKING_COLOR)),
-        ]
+
+// Renders a / search textbox with rounded border and cursor placement.
+fn render_search_input(frame: &mut Frame, area: Rect, query: &str, placeholder: &str) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(BG));
+    let widget = if query.is_empty() {
+        Paragraph::new(Line::from(vec![
+            Span::styled("/ ", Style::default().fg(ACCENT)),
+            Span::styled(placeholder.to_owned(), Style::default().fg(THINKING_COLOR)),
+        ])).block(block)
     } else {
-        vec![
-            Span::styled("  ❯ ", Style::default().fg(ACCENT)),
-            Span::styled(query.to_owned(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled("_", Style::default().fg(ACCENT)),
-        ]
+        Paragraph::new(Line::from(vec![
+            Span::styled("/ ", Style::default().fg(ACCENT)),
+            Span::styled(query.to_owned(), Style::default().fg(Color::White)),
+        ])).block(block)
     };
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    frame.render_widget(widget, area);
+    let cursor_x = area.x + 1 + 2 + query.chars().count() as u16;
+    frame.set_cursor_position((cursor_x.min(area.x + area.width - 2), area.y + 1));
 }
 
 // Renders hints spanning the full row width, centered.
@@ -75,29 +92,18 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
-    // content height for the active tab (+1 for search bar row)
-    let content_h: u16 = match app.config_section {
-        0 => 9,
-        1 => app.neurons.len().max(1) as u16 + 3,
-        2 => crate::app::GEN_PARAMS.len() as u16 + 3,
-        _ => 6,
-    };
+    let (title_area, content_area, hints_area) = page_layout(area);
+    render_title(frame, title_area);
 
-    let vert = Layout::default()
+    // split content: tab bar · search textbox · settings box
+    let content_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Fill(1),
-            Constraint::Length(3),   // title
-            Constraint::Length(1),   // tab bar
-            Constraint::Length(1),   // gap
-            Constraint::Length(content_h),
-            Constraint::Length(1),   // hints
+            Constraint::Length(1),
+            Constraint::Length(3),
             Constraint::Fill(1),
         ])
-        .split(area);
-
-    // ── Title ─────────────────────────────────────────────────────────────────
-    render_title(frame, vert[1]);
+        .split(content_area);
 
     // ── Tab bar ───────────────────────────────────────────────────────────────
     let tabs = ["Context", "Neurons", "Generation", "Performance"];
@@ -110,26 +116,27 @@ fn draw_config(frame: &mut Frame, app: &App) {
             tab_spans.push(Span::styled(*name, Style::default().fg(DIM)));
         }
     }
-    frame.render_widget(Paragraph::new(Line::from(tab_spans)).alignment(ratatui::layout::Alignment::Center), vert[2]);
+    frame.render_widget(Paragraph::new(Line::from(tab_spans)).alignment(ratatui::layout::Alignment::Center), content_chunks[0]);
+
+    // ── Search textbox ────────────────────────────────────────────────────────
+    render_search_input(frame, content_chunks[1], &app.config_search, "filter");
 
     // ── Content box ───────────────────────────────────────────────────────────
-    let content_area = centered_panel(vert[4]);
+    let box_area = content_chunks[2];
     let content_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACCENT))
         .style(Style::default().bg(BG));
     let inner = Rect {
-        x: content_area.x + 1,
-        y: content_area.y + 1,
-        width: content_area.width.saturating_sub(2),
-        height: content_area.height.saturating_sub(2),
+        x: box_area.x + 1,
+        y: box_area.y + 1,
+        width: box_area.width.saturating_sub(2),
+        height: box_area.height.saturating_sub(2),
     };
-    frame.render_widget(content_block, content_area);
+    frame.render_widget(content_block, box_area);
 
-    // search bar is always the first row of inner
-    render_search_bar(frame, Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 }, &app.config_search);
-    let items_y = inner.y + 1;
+    let items_y = inner.y;
 
     match app.config_section {
         0 => {
@@ -238,43 +245,34 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let mut hint_spans = vec![hint("↑/↓", "navigate"), Span::raw("  ")];
     hint_spans.extend(action_hint);
     hint_spans.extend([Span::raw("  "), hint("type", "filter"), Span::raw("  "), hint("Tab", "next tab"), Span::raw("  "), hint("Esc", "close")]);
-    render_hints(frame, vert[5], hint_spans);
+    render_hints(frame, hints_area, hint_spans);
 }
 
 fn draw_model_select(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    frame.render_widget(
-        Block::default().style(Style::default().bg(BG)),
-        area,
-    );
+    frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
-    let vert = Layout::default()
+    let (title_area, content_area, hints_area) = page_layout(area);
+    render_title(frame, title_area);
+
+    // split content: search input · model list
+    let content_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Fill(1),
-            Constraint::Length(3),
-            Constraint::Length(app.models.len().max(3).min(20) as u16 + 2),
-            Constraint::Length(2),
-            Constraint::Fill(1),
-        ])
-        .split(area);
+        .constraints([Constraint::Length(3), Constraint::Fill(1)])
+        .split(content_area);
 
-    render_title(frame, vert[1]);
+    // search input box
+    render_search_input(frame, content_chunks[0], &app.model_search, "search models…");
 
     // model list
-    let title_text = if app.model_search.is_empty() {
-        " models ".to_string()
-    } else {
-        format!(" models  ❯ {}_ ", app.model_search)
-    };
     let block = Block::default()
-        .title(Span::styled(title_text, Style::default().fg(ACCENT)))
+        .title(Span::styled(" models ", Style::default().fg(ACCENT)))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACCENT))
         .style(Style::default().bg(BG));
 
-    let list_area = vert[2];
+    let list_area = content_chunks[1];
 
     if app.loading_models {
         let p = Paragraph::new("Loading models…")
@@ -357,14 +355,12 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         );
     }
 
-    render_hints(frame, vert[3], vec![
+    render_hints(frame, hints_area, vec![
         hint("↑/↓", "navigate"),
         Span::raw("  "),
         hint("Enter", "select"),
         Span::raw("  "),
-        hint("type", "filter"),
-        Span::raw("  "),
-        hint("Esc", "clear filter"),
+        hint("Esc", "clear"),
         Span::raw("  "),
         hint("Tab", "settings"),
         Span::raw("  "),

@@ -36,6 +36,8 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let neuron_h: u16 = app.neurons.len().max(1) as u16 + 2;
     // generation params box: 1 line per param + borders
     let gen_h: u16 = crate::app::GEN_PARAMS.len() as u16 + 2;
+    // performance box: 2 toggles + borders
+    let perf_h: u16 = 4;
     // gap between boxes
     let gap: u16 = 1;
 
@@ -49,6 +51,8 @@ fn draw_config(frame: &mut Frame, app: &App) {
             Constraint::Length(neuron_h),
             Constraint::Length(gap),
             Constraint::Length(gen_h),
+            Constraint::Length(gap),
+            Constraint::Length(perf_h),
             Constraint::Length(2),
             Constraint::Fill(1),
         ])
@@ -177,19 +181,51 @@ fn draw_config(frame: &mut Frame, app: &App) {
         ])), Rect { x: gen_inner.x, y: gen_inner.y + i as u16, width: gen_inner.width, height: 1 });
     }
 
+    // ── Performance ───────────────────────────────────────────────────────────
+    struct PerfOption<'a> { label: &'a str, desc: &'a str, value: bool }
+    let perf_options = [
+        PerfOption { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache", value: app.ctx_pow2   },
+        PerfOption { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",  value: app.keep_alive },
+    ];
+
+    let perf_focused = app.config_section == 3;
+    let perf_border_style = if perf_focused { Style::default().fg(ACCENT) } else { Style::default().fg(DIM) };
+    let perf_block = Block::default()
+        .title(Span::styled(" Performance ", perf_border_style))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(perf_border_style)
+        .style(Style::default().bg(BG));
+
+    let perf_area = horiz(vert[8]);
+    let perf_inner = Rect { x: perf_area.x + 1, y: perf_area.y + 1, width: perf_area.width.saturating_sub(2), height: perf_area.height.saturating_sub(2) };
+    frame.render_widget(perf_block, perf_area);
+
+    for (i, opt) in perf_options.iter().enumerate() {
+        let cursor = perf_focused && i == app.perf_cursor;
+        let (marker, circle_fg) = if opt.value { ("●", ACCENT) } else { ("○", DIM) };
+        let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+        let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
+        let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+
+        frame.render_widget(Paragraph::new(Line::from(vec![
+            Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
+            Span::styled(opt.label, name_style),
+            Span::styled(format!("  —  {}", opt.desc), desc_style),
+        ])), Rect { x: perf_inner.x, y: perf_inner.y + i as u16, width: perf_inner.width, height: 1 });
+    }
+
     // hints
     let action_hint: Vec<Span> = if app.config_section == 2 {
         vec![hint("←/→", "adjust"), Span::raw("  "), hint("r", "reset")]
-    } else if app.config_section == 1 {
-        vec![hint("Enter", "toggle")]
     } else {
-        vec![hint("Enter", "select")]
+        vec![hint("Enter", "toggle")]
     };
     let mut hint_spans = vec![hint("↑/↓", "navigate"), Span::raw("  ")];
     hint_spans.extend(action_hint);
     hint_spans.extend([Span::raw("  "), hint("Tab", "switch section"), Span::raw("  "), hint("Esc", "close")]);
     let hints = Paragraph::new(Line::from(hint_spans)).style(Style::default().fg(DIM));
-    frame.render_widget(hints, horiz(vert[7]));
+    frame.render_widget(hints, horiz(vert[9]));
 }
 
 fn draw_model_select(frame: &mut Frame, app: &App) {

@@ -32,7 +32,7 @@ fn handle_config(app: &mut App, key: KeyEvent) {
         KeyCode::Esc => { app.toggle_config(); return; }
         // Tab switches between sections
         KeyCode::Tab => {
-            app.config_section = (app.config_section + 1) % 3;
+            app.config_section = (app.config_section + 1) % 4;
             return;
         }
         _ => {}
@@ -64,7 +64,7 @@ fn handle_config(app: &mut App, key: KeyEvent) {
             KeyCode::Enter | KeyCode::Char(' ') => app.toggle_neuron(),
             _ => {}
         }
-    } else {
+    } else if app.config_section == 2 {
         // generation params section
         let count = crate::app::GEN_PARAMS.len();
         match key.code {
@@ -77,6 +77,18 @@ fn handle_config(app: &mut App, key: KeyEvent) {
             KeyCode::Left  | KeyCode::Char('-') => app.param_adjust(-1.0),
             KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=') => app.param_adjust(1.0),
             KeyCode::Char('r') | KeyCode::Backspace => app.param_reset(),
+            _ => {}
+        }
+    } else {
+        // performance section
+        match key.code {
+            KeyCode::Up   | KeyCode::Char('k') => {
+                if app.perf_cursor > 0 { app.perf_cursor -= 1; }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if app.perf_cursor + 1 < 2 { app.perf_cursor += 1; }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => app.toggle_perf(app.perf_cursor),
             _ => {}
         }
     }

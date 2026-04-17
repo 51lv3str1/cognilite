@@ -87,6 +87,7 @@ pub fn stream_chat(
     messages: Vec<ChatMessage>,
     num_ctx: Option<u64>,
     gen_params: [f64; 3],
+    keep_alive: bool,
     tx: Sender<StreamChunk>,
 ) {
     let url = format!("{}/api/chat", base_url);
@@ -100,12 +101,15 @@ pub fn stream_chat(
         options["num_ctx"] = serde_json::json!(ctx);
     }
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "messages": messages,
         "stream": true,
         "options": options,
     });
+    if keep_alive {
+        body["keep_alive"] = serde_json::json!(-1);
+    }
 
     let response = match ureq::post(&url).send_json(body) {
         Ok(r) => r,

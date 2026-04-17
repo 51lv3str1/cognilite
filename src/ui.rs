@@ -78,7 +78,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
             tab_spans.push(Span::styled(*name, Style::default().fg(DIM)));
         }
     }
-    frame.render_widget(Paragraph::new(Line::from(tab_spans)), horiz(vert[2]));
+    frame.render_widget(Paragraph::new(Line::from(tab_spans)).alignment(ratatui::layout::Alignment::Center), vert[2]);
 
     // ── Content box ───────────────────────────────────────────────────────────
     let content_area = horiz(vert[4]);
@@ -192,7 +192,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let mut hint_spans = vec![hint("↑/↓", "navigate"), Span::raw("  ")];
     hint_spans.extend(action_hint);
     hint_spans.extend([Span::raw("  "), hint("Tab", "next tab"), Span::raw("  "), hint("Esc", "close")]);
-    frame.render_widget(Paragraph::new(Line::from(hint_spans)).style(Style::default().fg(DIM)), horiz(vert[5]));
+    frame.render_widget(Paragraph::new(Line::from(hint_spans)).style(Style::default().fg(DIM)).alignment(ratatui::layout::Alignment::Center), vert[5]);
 }
 
 fn draw_model_select(frame: &mut Frame, app: &App) {

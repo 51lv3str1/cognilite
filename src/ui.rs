@@ -30,34 +30,6 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
-    // ctx strategy box: 2 options × (1 label + 1 desc) + 1 gap + borders = 8
-    let ctx_h: u16 = 8;
-    // neurons box: 1 line per neuron + borders
-    let neuron_h: u16 = app.neurons.len().max(1) as u16 + 2;
-    // generation params box: 1 line per param + borders
-    let gen_h: u16 = crate::app::GEN_PARAMS.len() as u16 + 2;
-    // performance box: 3 toggles + borders
-    let perf_h: u16 = 5;
-    // gap between boxes
-    let gap: u16 = 1;
-
-    let vert = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Fill(1),
-            Constraint::Length(3),
-            Constraint::Length(ctx_h),
-            Constraint::Length(gap),
-            Constraint::Length(neuron_h),
-            Constraint::Length(gap),
-            Constraint::Length(gen_h),
-            Constraint::Length(gap),
-            Constraint::Length(perf_h),
-            Constraint::Length(2),
-            Constraint::Fill(1),
-        ])
-        .split(area);
-
     let horiz = |row: Rect| {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -65,7 +37,28 @@ fn draw_config(frame: &mut Frame, app: &App) {
             .split(row)[1]
     };
 
-    // title
+    // content height for the active tab
+    let content_h: u16 = match app.config_section {
+        0 => 8,  // context: 2 options with descriptions
+        1 => app.neurons.len().max(1) as u16 + 2,
+        2 => crate::app::GEN_PARAMS.len() as u16 + 2,
+        _ => 5,  // performance: 3 toggles
+    };
+
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(3),   // title
+            Constraint::Length(1),   // tab bar
+            Constraint::Length(1),   // gap
+            Constraint::Length(content_h),
+            Constraint::Length(1),   // hints
+            Constraint::Fill(1),
+        ])
+        .split(area);
+
+    // ── Title ─────────────────────────────────────────────────────────────────
     let title = Paragraph::new(Line::from(vec![
         Span::styled("cogni", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Span::styled("lite", Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
@@ -74,149 +67,123 @@ fn draw_config(frame: &mut Frame, app: &App) {
     .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(SURFACE)));
     frame.render_widget(title, horiz(vert[1]));
 
-    // ── Context strategy ─────────────────────────────────────────────────────
-    struct CtxOption<'a> { label: &'a str, desc: &'a str, strategy: CtxStrategy }
-    let ctx_options = [
-        CtxOption { label: "Dynamic context", desc: "Grows with the conversation. Faster, lower memory.", strategy: CtxStrategy::Dynamic },
-        CtxOption { label: "Full context",    desc: "Always uses the model's max window. Slower but never\ntruncates long histories.", strategy: CtxStrategy::Full },
-    ];
-
-    let ctx_focused = app.config_section == 0;
-    let ctx_border_style = if ctx_focused { Style::default().fg(ACCENT) } else { Style::default().fg(DIM) };
-    let ctx_block = Block::default()
-        .title(Span::styled(" Context strategy ", ctx_border_style))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(ctx_border_style)
-        .style(Style::default().bg(BG));
-
-    let ctx_area = horiz(vert[2]);
-    let ctx_inner = Rect { x: ctx_area.x + 1, y: ctx_area.y + 1, width: ctx_area.width.saturating_sub(2), height: ctx_area.height.saturating_sub(2) };
-    frame.render_widget(ctx_block, ctx_area);
-
-    let mut y = ctx_inner.y;
-    for (i, opt) in ctx_options.iter().enumerate() {
-        let cursor  = ctx_focused && i == app.config_cursor;
-        let checked = opt.strategy == app.ctx_strategy;
-        let (marker, circle_fg) = if checked { ("●", ACCENT) } else { ("○", DIM) };
-        let label_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
-        let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
-
-        frame.render_widget(Paragraph::new(Line::from(vec![
-            Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
-            Span::styled(opt.label, label_style),
-        ])), Rect { x: ctx_inner.x, y, width: ctx_inner.width, height: 1 });
-        y += 1;
-
-        for desc_line in opt.desc.lines() {
-            frame.render_widget(Paragraph::new(Line::from(Span::styled(
-                format!("    {desc_line}"), Style::default().fg(DIM),
-            ))), Rect { x: ctx_inner.x, y, width: ctx_inner.width, height: 1 });
-            y += 1;
+    // ── Tab bar ───────────────────────────────────────────────────────────────
+    let tabs = ["Context", "Neurons", "Generation", "Performance"];
+    let mut tab_spans: Vec<Span> = Vec::new();
+    for (i, name) in tabs.iter().enumerate() {
+        if i > 0 { tab_spans.push(Span::styled("  ·  ", Style::default().fg(THINKING_COLOR))); }
+        if i == app.config_section {
+            tab_spans.push(Span::styled(*name, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)));
+        } else {
+            tab_spans.push(Span::styled(*name, Style::default().fg(DIM)));
         }
-        y += 1;
     }
+    frame.render_widget(Paragraph::new(Line::from(tab_spans)), horiz(vert[2]));
 
-    // ── Neurons ───────────────────────────────────────────────────────────────
-    let neu_focused = app.config_section == 1;
-    let neu_border_style = if neu_focused { Style::default().fg(ACCENT) } else { Style::default().fg(DIM) };
-    let neu_block = Block::default()
-        .title(Span::styled(" Neurons ", neu_border_style))
+    // ── Content box ───────────────────────────────────────────────────────────
+    let content_area = horiz(vert[4]);
+    let content_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(neu_border_style)
+        .border_style(Style::default().fg(ACCENT))
         .style(Style::default().bg(BG));
+    let inner = Rect {
+        x: content_area.x + 1,
+        y: content_area.y + 1,
+        width: content_area.width.saturating_sub(2),
+        height: content_area.height.saturating_sub(2),
+    };
+    frame.render_widget(content_block, content_area);
 
-    let neu_area = horiz(vert[4]);
-    let neu_inner = Rect { x: neu_area.x + 1, y: neu_area.y + 1, width: neu_area.width.saturating_sub(2), height: neu_area.height.saturating_sub(2) };
-    frame.render_widget(neu_block, neu_area);
-
-    for (i, neuron) in app.neurons.iter().enumerate() {
-        let cursor  = neu_focused && i == app.neuron_cursor;
-        let enabled = !app.disabled_neurons.contains(&neuron.name);
-        let (marker, circle_fg) = if enabled { ("●", ACCENT) } else { ("○", DIM) };
-
-        let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
-        let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
-        let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
-
-        let desc = if neuron.description.is_empty() { String::new() } else { format!("  —  {}", neuron.description) };
-        frame.render_widget(Paragraph::new(Line::from(vec![
-            Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
-            Span::styled(&neuron.name, name_style),
-            Span::styled(desc, desc_style),
-        ])), Rect { x: neu_inner.x, y: neu_inner.y + i as u16, width: neu_inner.width, height: 1 });
+    match app.config_section {
+        0 => {
+            // ── Context strategy ──────────────────────────────────────────────
+            struct CtxOption<'a> { label: &'a str, desc: &'a str, strategy: CtxStrategy }
+            let ctx_options = [
+                CtxOption { label: "Dynamic context", desc: "Grows with the conversation. Faster, lower memory.", strategy: CtxStrategy::Dynamic },
+                CtxOption { label: "Full context",    desc: "Always uses the model's max window. Slower but never\ntruncates long histories.", strategy: CtxStrategy::Full },
+            ];
+            let mut y = inner.y;
+            for (i, opt) in ctx_options.iter().enumerate() {
+                let cursor  = i == app.config_cursor;
+                let checked = opt.strategy == app.ctx_strategy;
+                let (marker, circle_fg) = if checked { ("●", ACCENT) } else { ("○", DIM) };
+                let label_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+                let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+                frame.render_widget(Paragraph::new(Line::from(vec![
+                    Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
+                    Span::styled(opt.label, label_style),
+                ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                y += 1;
+                for desc_line in opt.desc.lines() {
+                    frame.render_widget(Paragraph::new(Line::from(Span::styled(
+                        format!("    {desc_line}"), Style::default().fg(DIM),
+                    ))), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                    y += 1;
+                }
+                y += 1;
+            }
+        }
+        1 => {
+            // ── Neurons ───────────────────────────────────────────────────────
+            for (i, neuron) in app.neurons.iter().enumerate() {
+                let cursor  = i == app.neuron_cursor;
+                let enabled = !app.disabled_neurons.contains(&neuron.name);
+                let (marker, circle_fg) = if enabled { ("●", ACCENT) } else { ("○", DIM) };
+                let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+                let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
+                let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+                let desc = if neuron.description.is_empty() { String::new() } else { format!("  —  {}", neuron.description) };
+                frame.render_widget(Paragraph::new(Line::from(vec![
+                    Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
+                    Span::styled(&neuron.name, name_style),
+                    Span::styled(desc, desc_style),
+                ])), Rect { x: inner.x, y: inner.y + i as u16, width: inner.width, height: 1 });
+            }
+        }
+        2 => {
+            // ── Generation params ─────────────────────────────────────────────
+            for (i, (name, desc, default, _, _, _)) in crate::app::GEN_PARAMS.iter().enumerate() {
+                let cursor = i == app.param_cursor;
+                let value = app.gen_params[i];
+                let is_default = (value - default).abs() < 0.001;
+                let bg         = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+                let name_style = bg.patch(if cursor { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) });
+                let val_style  = bg.patch(if is_default { Style::default().fg(DIM) } else { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) });
+                let dim_style  = bg.patch(Style::default().fg(THINKING_COLOR));
+                frame.render_widget(Paragraph::new(Line::from(vec![
+                    Span::styled(format!("  {name:<16}"), name_style),
+                    Span::styled("← ", dim_style),
+                    Span::styled(format!("{value:.2}"), val_style),
+                    Span::styled(" →", dim_style),
+                    Span::styled(format!("  {desc}"), dim_style),
+                ])), Rect { x: inner.x, y: inner.y + i as u16, width: inner.width, height: 1 });
+            }
+        }
+        _ => {
+            // ── Performance ───────────────────────────────────────────────────
+            struct PerfOption<'a> { label: &'a str, desc: &'a str, value: bool }
+            let perf_options = [
+                PerfOption { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache", value: app.ctx_pow2   },
+                PerfOption { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",  value: app.keep_alive },
+                PerfOption { label: "Warm-up cache",    desc: "Pre-fill KV cache with the system prompt on model load",    value: app.warmup     },
+            ];
+            for (i, opt) in perf_options.iter().enumerate() {
+                let cursor = i == app.perf_cursor;
+                let (marker, circle_fg) = if opt.value { ("●", ACCENT) } else { ("○", DIM) };
+                let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+                let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
+                let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+                frame.render_widget(Paragraph::new(Line::from(vec![
+                    Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
+                    Span::styled(opt.label, name_style),
+                    Span::styled(format!("  —  {}", opt.desc), desc_style),
+                ])), Rect { x: inner.x, y: inner.y + i as u16, width: inner.width, height: 1 });
+            }
+        }
     }
 
-    // ── Generation params ─────────────────────────────────────────────────────
-    let gen_focused = app.config_section == 2;
-    let gen_border_style = if gen_focused { Style::default().fg(ACCENT) } else { Style::default().fg(DIM) };
-    let gen_block = Block::default()
-        .title(Span::styled(" Generation ", gen_border_style))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(gen_border_style)
-        .style(Style::default().bg(BG));
-
-    let gen_area = horiz(vert[6]);
-    let gen_inner = Rect { x: gen_area.x + 1, y: gen_area.y + 1, width: gen_area.width.saturating_sub(2), height: gen_area.height.saturating_sub(2) };
-    frame.render_widget(gen_block, gen_area);
-
-    for (i, (name, desc, default, _, _, _)) in crate::app::GEN_PARAMS.iter().enumerate() {
-        let cursor = gen_focused && i == app.param_cursor;
-        let value = app.gen_params[i];
-        let is_default = (value - default).abs() < 0.001;
-
-        let bg         = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
-        let name_style = bg.patch(if cursor { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) });
-        let val_style  = bg.patch(if is_default { Style::default().fg(DIM) } else { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) });
-        let dim_style  = bg.patch(Style::default().fg(THINKING_COLOR));
-
-        frame.render_widget(Paragraph::new(Line::from(vec![
-            Span::styled(format!("  {name:<16}"), name_style),
-            Span::styled("← ", dim_style),
-            Span::styled(format!("{value:.2}"), val_style),
-            Span::styled(" →", dim_style),
-            Span::styled(format!("  {desc}"), dim_style),
-        ])), Rect { x: gen_inner.x, y: gen_inner.y + i as u16, width: gen_inner.width, height: 1 });
-    }
-
-    // ── Performance ───────────────────────────────────────────────────────────
-    struct PerfOption<'a> { label: &'a str, desc: &'a str, value: bool }
-    let perf_options = [
-        PerfOption { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache", value: app.ctx_pow2   },
-        PerfOption { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",  value: app.keep_alive },
-        PerfOption { label: "Warm-up cache",    desc: "Pre-fill KV cache with the system prompt on model load",    value: app.warmup     },
-    ];
-
-    let perf_focused = app.config_section == 3;
-    let perf_border_style = if perf_focused { Style::default().fg(ACCENT) } else { Style::default().fg(DIM) };
-    let perf_block = Block::default()
-        .title(Span::styled(" Performance ", perf_border_style))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(perf_border_style)
-        .style(Style::default().bg(BG));
-
-    let perf_area = horiz(vert[8]);
-    let perf_inner = Rect { x: perf_area.x + 1, y: perf_area.y + 1, width: perf_area.width.saturating_sub(2), height: perf_area.height.saturating_sub(2) };
-    frame.render_widget(perf_block, perf_area);
-
-    for (i, opt) in perf_options.iter().enumerate() {
-        let cursor = perf_focused && i == app.perf_cursor;
-        let (marker, circle_fg) = if opt.value { ("●", ACCENT) } else { ("○", DIM) };
-        let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
-        let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
-        let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
-
-        frame.render_widget(Paragraph::new(Line::from(vec![
-            Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
-            Span::styled(opt.label, name_style),
-            Span::styled(format!("  —  {}", opt.desc), desc_style),
-        ])), Rect { x: perf_inner.x, y: perf_inner.y + i as u16, width: perf_inner.width, height: 1 });
-    }
-
-    // hints
+    // ── Hints ─────────────────────────────────────────────────────────────────
     let action_hint: Vec<Span> = if app.config_section == 2 {
         vec![hint("←/→", "adjust"), Span::raw("  "), hint("r", "reset")]
     } else {
@@ -224,9 +191,8 @@ fn draw_config(frame: &mut Frame, app: &App) {
     };
     let mut hint_spans = vec![hint("↑/↓", "navigate"), Span::raw("  ")];
     hint_spans.extend(action_hint);
-    hint_spans.extend([Span::raw("  "), hint("Tab", "switch section"), Span::raw("  "), hint("Esc", "close")]);
-    let hints = Paragraph::new(Line::from(hint_spans)).style(Style::default().fg(DIM));
-    frame.render_widget(hints, horiz(vert[9]));
+    hint_spans.extend([Span::raw("  "), hint("Tab", "next tab"), Span::raw("  "), hint("Esc", "close")]);
+    frame.render_widget(Paragraph::new(Line::from(hint_spans)).style(Style::default().fg(DIM)), horiz(vert[5]));
 }
 
 fn draw_model_select(frame: &mut Frame, app: &App) {

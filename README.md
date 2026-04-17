@@ -233,13 +233,13 @@ Create a directory under `.cognilite/neurons/<name>/` in your project (or `~/.co
 ```
 
 **`neuron.toml`:**
-```toml
+```
 name = Git
 description = Run git commands to inspect the repository
 ```
 
 **`synapses/git-log.toml`:**
-```toml
+```
 trigger = git-log
 kind = tool
 command = git log --oneline -20
@@ -254,7 +254,7 @@ abc1234 feat: add streaming support
 ```
 
 **Shell passthrough** (run any command, no synapse files needed):
-```toml
+```
 name = Shell
 description = Execute shell commands
 shell = true

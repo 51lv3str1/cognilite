@@ -48,15 +48,15 @@ struct TokenStats {
     tokens_per_sec: f64,
     thinking_secs: Option<f64>,  // duration until first content token
     wall_secs: f64,
+    prompt_eval_count: u64,      // tokens re-evaluated (0 = cache hit)
 }
 ```
 
 ## Neuron system
 
-Neurons are loaded from (in order, later overrides earlier):
-1. Built-ins embedded in the binary: `Knowledge`, `Shell`
-2. `.cognilite/neurons/<name>/` — project-local (this directory)
-3. `~/.config/cognilite/neurons/<name>/` — user-global
+Neurons are loaded from (in order):
+1. `.cognilite/neurons/<name>/` — project-local (this directory)
+2. `~/.config/cognilite/neurons/<name>/` — user-global
 
 Each neuron directory contains:
 - `neuron.toml` — `name`, `description`, optional `shell = true`

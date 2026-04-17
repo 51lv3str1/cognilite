@@ -215,6 +215,7 @@ pub struct App {
     pub should_quit: bool,
     pub show_help: bool,
     pub help_scroll: u16,
+    pub copy_notice: Option<std::time::Instant>,
 }
 
 impl App {
@@ -278,6 +279,7 @@ impl App {
             should_quit: false,
             show_help: false,
             help_scroll: 0,
+            copy_notice: None,
         }
     }
 
@@ -617,6 +619,17 @@ impl App {
         if let Some(last) = self.messages.last() {
             if last.role == Role::Assistant && last.content.is_empty() && last.thinking.is_empty() {
                 self.messages.pop();
+            }
+        }
+    }
+
+    pub fn copy_last_response(&mut self) {
+        let text = self.messages.iter().rev()
+            .find(|m| m.role == Role::Assistant && !m.content.is_empty())
+            .map(|m| m.content.clone());
+        if let Some(text) = text {
+            if crate::clipboard::copy(&text) {
+                self.copy_notice = Some(std::time::Instant::now());
             }
         }
     }
@@ -1243,7 +1256,7 @@ pub fn resolve_attachments(
     (display, llm_content, attachments, images)
 }
 
-fn base64_encode(data: &[u8]) -> String {
+pub fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
     for chunk in data.chunks(3) {

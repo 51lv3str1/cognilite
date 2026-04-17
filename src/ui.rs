@@ -425,6 +425,13 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         }
     }
 
+    if let Some(t) = app.copy_notice {
+        if t.elapsed().as_secs_f64() < 2.0 {
+            header_spans.push(Span::styled("  ✓ copied", Style::default().fg(USER_COLOR)));
+        } else {
+            app.copy_notice = None;
+        }
+    }
     frame.render_widget(Paragraph::new(Line::from(header_spans)), chunks[0]);
 
     // --- messages ---
@@ -852,6 +859,7 @@ fn draw_help_popup(frame: &mut Frame, app: &App, area: Rect) {
             ("Ctrl+End",     "Jump to bottom"),
         ]),
         ("Chat", &[
+            ("Ctrl+Y",       "Copy last response to clipboard"),
             ("Ctrl+L",       "Clear conversation"),
             ("@path",        "Attach a file or image"),
             ("Ctrl+C",       "Quit"),

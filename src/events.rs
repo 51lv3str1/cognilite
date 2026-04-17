@@ -250,6 +250,7 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
         KeyCode::Char('k') if ctrl => app.input_kill_to_end(),
         KeyCode::Char('u') if ctrl => app.input_kill_to_start(),
         KeyCode::Char('w') if ctrl => { app.input_delete_word_before(); app.update_completion(); }
+        KeyCode::Char('y') if ctrl => app.copy_last_response(),
         KeyCode::Char('l') if ctrl => app.clear_chat(),
 
         // ── cursor movement ──────────────────────────────────────────────────

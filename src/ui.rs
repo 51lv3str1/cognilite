@@ -45,6 +45,22 @@ fn render_title(frame: &mut Frame, area: Rect) {
     frame.render_widget(title, centered_panel(area));
 }
 
+fn render_search_bar(frame: &mut Frame, area: Rect, query: &str) {
+    let spans = if query.is_empty() {
+        vec![
+            Span::styled("  ❯ ", Style::default().fg(DIM)),
+            Span::styled("type to filter", Style::default().fg(THINKING_COLOR)),
+        ]
+    } else {
+        vec![
+            Span::styled("  ❯ ", Style::default().fg(ACCENT)),
+            Span::styled(query.to_owned(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("_", Style::default().fg(ACCENT)),
+        ]
+    };
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 // Renders hints spanning the full row width, centered.
 fn render_hints(frame: &mut Frame, area: Rect, spans: Vec<Span>) {
     frame.render_widget(
@@ -59,12 +75,12 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
-    // content height for the active tab
+    // content height for the active tab (+1 for search bar row)
     let content_h: u16 = match app.config_section {
-        0 => 8,  // context: 2 options with descriptions
-        1 => app.neurons.len().max(1) as u16 + 2,
-        2 => crate::app::GEN_PARAMS.len() as u16 + 2,
-        _ => 5,  // performance: 3 toggles
+        0 => 9,
+        1 => app.neurons.len().max(1) as u16 + 3,
+        2 => crate::app::GEN_PARAMS.len() as u16 + 3,
+        _ => 6,
     };
 
     let vert = Layout::default()
@@ -111,6 +127,10 @@ fn draw_config(frame: &mut Frame, app: &App) {
     };
     frame.render_widget(content_block, content_area);
 
+    // search bar is always the first row of inner
+    render_search_bar(frame, Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 }, &app.config_search);
+    let items_y = inner.y + 1;
+
     match app.config_section {
         0 => {
             // ── Context strategy ──────────────────────────────────────────────
@@ -119,8 +139,9 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 CtxOption { label: "Dynamic context", desc: "Grows with the conversation. Faster, lower memory.", strategy: CtxStrategy::Dynamic },
                 CtxOption { label: "Full context",    desc: "Always uses the model's max window. Slower but never\ntruncates long histories.", strategy: CtxStrategy::Full },
             ];
-            let mut y = inner.y;
+            let mut y = items_y;
             for (i, opt) in ctx_options.iter().enumerate() {
+                if !crate::app::fuzzy_match(&app.config_search, opt.label) { continue; }
                 let cursor  = i == app.config_cursor;
                 let checked = opt.strategy == app.ctx_strategy;
                 let (marker, circle_fg) = if checked { ("●", ACCENT) } else { ("○", DIM) };
@@ -142,8 +163,11 @@ fn draw_config(frame: &mut Frame, app: &App) {
         }
         1 => {
             // ── Neurons ───────────────────────────────────────────────────────
-            for (i, neuron) in app.neurons.iter().enumerate() {
-                let cursor  = i == app.neuron_cursor;
+            let filtered: Vec<(usize, &crate::synapse::Neuron)> = app.neurons.iter().enumerate()
+                .filter(|(_, n)| crate::app::fuzzy_match(&app.config_search, &n.name))
+                .collect();
+            for (row, (orig_idx, neuron)) in filtered.iter().enumerate() {
+                let cursor  = *orig_idx == app.neuron_cursor;
                 let enabled = !app.disabled_neurons.contains(&neuron.name);
                 let (marker, circle_fg) = if enabled { ("●", ACCENT) } else { ("○", DIM) };
                 let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
@@ -154,14 +178,17 @@ fn draw_config(frame: &mut Frame, app: &App) {
                     Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
                     Span::styled(&neuron.name, name_style),
                     Span::styled(desc, desc_style),
-                ])), Rect { x: inner.x, y: inner.y + i as u16, width: inner.width, height: 1 });
+                ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
             }
         }
         2 => {
             // ── Generation params ─────────────────────────────────────────────
-            for (i, (name, desc, default, _, _, _)) in crate::app::GEN_PARAMS.iter().enumerate() {
-                let cursor = i == app.param_cursor;
-                let value = app.gen_params[i];
+            let filtered: Vec<(usize, &(&str, &str, f64, f64, f64, f64))> = crate::app::GEN_PARAMS.iter().enumerate()
+                .filter(|(_, (name, _, _, _, _, _))| crate::app::fuzzy_match(&app.config_search, name))
+                .collect();
+            for (row, (orig_idx, (name, desc, default, _, _, _))) in filtered.iter().enumerate() {
+                let cursor = *orig_idx == app.param_cursor;
+                let value = app.gen_params[*orig_idx];
                 let is_default = (value - default).abs() < 0.001;
                 let bg         = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
                 let name_style = bg.patch(if cursor { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) });
@@ -173,7 +200,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
                     Span::styled(format!("{value:.2}"), val_style),
                     Span::styled(" →", dim_style),
                     Span::styled(format!("  {desc}"), dim_style),
-                ])), Rect { x: inner.x, y: inner.y + i as u16, width: inner.width, height: 1 });
+                ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
             }
         }
         _ => {
@@ -184,8 +211,11 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 PerfOption { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",  value: app.keep_alive },
                 PerfOption { label: "Warm-up cache",    desc: "Pre-fill KV cache with the system prompt on model load",    value: app.warmup     },
             ];
-            for (i, opt) in perf_options.iter().enumerate() {
-                let cursor = i == app.perf_cursor;
+            let filtered: Vec<(usize, &PerfOption)> = perf_options.iter().enumerate()
+                .filter(|(_, o)| crate::app::fuzzy_match(&app.config_search, o.label))
+                .collect();
+            for (row, (orig_idx, opt)) in filtered.iter().enumerate() {
+                let cursor = *orig_idx == app.perf_cursor;
                 let (marker, circle_fg) = if opt.value { ("●", ACCENT) } else { ("○", DIM) };
                 let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
                 let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
@@ -194,7 +224,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
                     Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
                     Span::styled(opt.label, name_style),
                     Span::styled(format!("  —  {}", opt.desc), desc_style),
-                ])), Rect { x: inner.x, y: inner.y + i as u16, width: inner.width, height: 1 });
+                ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
             }
         }
     }
@@ -207,7 +237,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
     };
     let mut hint_spans = vec![hint("↑/↓", "navigate"), Span::raw("  ")];
     hint_spans.extend(action_hint);
-    hint_spans.extend([Span::raw("  "), hint("Tab", "next tab"), Span::raw("  "), hint("Esc", "close")]);
+    hint_spans.extend([Span::raw("  "), hint("type", "filter"), Span::raw("  "), hint("Tab", "next tab"), Span::raw("  "), hint("Esc", "close")]);
     render_hints(frame, vert[5], hint_spans);
 }
 
@@ -232,14 +262,19 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
     render_title(frame, vert[1]);
 
     // model list
+    let title_text = if app.model_search.is_empty() {
+        " models ".to_string()
+    } else {
+        format!(" models  ❯ {}_ ", app.model_search)
+    };
     let block = Block::default()
-        .title(Span::styled(" Select model ", Style::default().fg(ACCENT)))
+        .title(Span::styled(title_text, Style::default().fg(ACCENT)))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACCENT))
         .style(Style::default().bg(BG));
 
-    let list_area = centered_panel(vert[2]);
+    let list_area = vert[2];
 
     if app.loading_models {
         let p = Paragraph::new("Loading models…")
@@ -269,12 +304,15 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         let inner = list_area.width.saturating_sub(2) as usize; // subtract left+right borders
         let name_w = inner.saturating_sub(LEFT_PAD + GAP + META_W + RIGHT_PAD);
 
-        let items: Vec<ListItem> = app
-            .models
+        let filtered_models: Vec<(usize, &crate::ollama::ModelEntry)> = app.models.iter().enumerate()
+            .filter(|(_, m)| crate::app::fuzzy_match(&app.model_search, &m.name))
+            .collect();
+        let selected_pos = filtered_models.iter().position(|(i, _)| *i == app.model_cursor);
+
+        let items: Vec<ListItem> = filtered_models
             .iter()
-            .enumerate()
-            .map(|(i, entry)| {
-                let selected = i == app.model_cursor;
+            .map(|(orig_idx, entry)| {
+                let selected = *orig_idx == app.model_cursor;
 
                 // truncate name if needed
                 let name_chars: Vec<char> = entry.name.chars().collect();
@@ -311,7 +349,7 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
             })
             .collect();
 
-        let mut state = ListState::default().with_selected(Some(app.model_cursor));
+        let mut state = ListState::default().with_selected(selected_pos);
         frame.render_stateful_widget(
             List::new(items).block(block).highlight_style(Style::default()),
             list_area,
@@ -323,6 +361,10 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         hint("↑/↓", "navigate"),
         Span::raw("  "),
         hint("Enter", "select"),
+        Span::raw("  "),
+        hint("type", "filter"),
+        Span::raw("  "),
+        hint("Esc", "clear filter"),
         Span::raw("  "),
         hint("Tab", "settings"),
         Span::raw("  "),

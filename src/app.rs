@@ -93,6 +93,11 @@ pub fn save_config(strategy: &CtxStrategy, disabled_neurons: &std::collections::
     let _ = std::fs::write(&path, json.to_string());
 }
 
+pub fn fuzzy_match(query: &str, target: &str) -> bool {
+    if query.is_empty() { return true; }
+    target.to_lowercase().contains(&query.to_lowercase())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Role {
     User,
@@ -172,9 +177,11 @@ pub struct App {
     pub keep_alive: bool,
     pub warmup: bool,
     pub perf_cursor: usize,
+    pub config_search: String,  // filter query for all config sections
     // model select
     pub models: Vec<ModelEntry>,
     pub model_cursor: usize,
+    pub model_search: String,
     pub loading_models: bool,
     pub models_error: Option<String>,
     // chat
@@ -227,8 +234,10 @@ impl App {
             keep_alive: cfg.keep_alive,
             warmup: cfg.warmup,
             perf_cursor: 0,
+            config_search: String::new(),
             models: Vec::new(),
             model_cursor: 0,
+            model_search: String::new(),
             loading_models: true,
             models_error: None,
             selected_model: None,

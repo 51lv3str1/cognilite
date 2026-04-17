@@ -26,16 +26,38 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
+// Centers a row to max 52 columns — for content boxes and title.
+fn centered_panel(row: Rect) -> Rect {
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Fill(1), Constraint::Max(52), Constraint::Fill(1)])
+        .split(row)[1]
+}
+
+// Renders the shared cognilite title with bottom border.
+fn render_title(frame: &mut Frame, area: Rect) {
+    let title = Paragraph::new(Line::from(vec![
+        Span::styled("cogni", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled("lite", Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
+        Span::styled("  ·  ollama TUI", Style::default().fg(DIM)),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(SURFACE)));
+    frame.render_widget(title, centered_panel(area));
+}
+
+// Renders hints spanning the full row width, centered.
+fn render_hints(frame: &mut Frame, area: Rect, spans: Vec<Span>) {
+    frame.render_widget(
+        Paragraph::new(Line::from(spans))
+            .style(Style::default().fg(DIM))
+            .alignment(ratatui::layout::Alignment::Center),
+        area,
+    );
+}
+
 fn draw_config(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
-
-    let horiz = |row: Rect| {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Fill(1), Constraint::Max(52), Constraint::Fill(1)])
-            .split(row)[1]
-    };
 
     // content height for the active tab
     let content_h: u16 = match app.config_section {
@@ -59,13 +81,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
         .split(area);
 
     // ── Title ─────────────────────────────────────────────────────────────────
-    let title = Paragraph::new(Line::from(vec![
-        Span::styled("cogni", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
-        Span::styled("lite", Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
-        Span::styled("  ·  ollama TUI", Style::default().fg(DIM)),
-    ]))
-    .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(SURFACE)));
-    frame.render_widget(title, horiz(vert[1]));
+    render_title(frame, vert[1]);
 
     // ── Tab bar ───────────────────────────────────────────────────────────────
     let tabs = ["Context", "Neurons", "Generation", "Performance"];
@@ -81,7 +97,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(tab_spans)).alignment(ratatui::layout::Alignment::Center), vert[2]);
 
     // ── Content box ───────────────────────────────────────────────────────────
-    let content_area = horiz(vert[4]);
+    let content_area = centered_panel(vert[4]);
     let content_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -192,7 +208,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
     let mut hint_spans = vec![hint("↑/↓", "navigate"), Span::raw("  ")];
     hint_spans.extend(action_hint);
     hint_spans.extend([Span::raw("  "), hint("Tab", "next tab"), Span::raw("  "), hint("Esc", "close")]);
-    frame.render_widget(Paragraph::new(Line::from(hint_spans)).style(Style::default().fg(DIM)).alignment(ratatui::layout::Alignment::Center), vert[5]);
+    render_hints(frame, vert[5], hint_spans);
 }
 
 fn draw_model_select(frame: &mut Frame, app: &App) {
@@ -213,21 +229,7 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         ])
         .split(area);
 
-    let horiz = |row: Rect| {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Fill(1), Constraint::Max(52), Constraint::Fill(1)])
-            .split(row)[1]
-    };
-
-    // title
-    let title = Paragraph::new(Line::from(vec![
-        Span::styled("cogni", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
-        Span::styled("lite", Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
-        Span::styled("  ·  ollama TUI", Style::default().fg(DIM)),
-    ]))
-    .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(SURFACE)));
-    frame.render_widget(title, horiz(vert[1]));
+    render_title(frame, vert[1]);
 
     // model list
     let block = Block::default()
@@ -237,7 +239,7 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         .border_style(Style::default().fg(ACCENT))
         .style(Style::default().bg(BG));
 
-    let list_area = horiz(vert[2]);
+    let list_area = centered_panel(vert[2]);
 
     if app.loading_models {
         let p = Paragraph::new("Loading models…")
@@ -317,8 +319,7 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         );
     }
 
-    // hints
-    let hints = Paragraph::new(Line::from(vec![
+    render_hints(frame, vert[3], vec![
         hint("↑/↓", "navigate"),
         Span::raw("  "),
         hint("Enter", "select"),
@@ -326,9 +327,7 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         hint("Tab", "settings"),
         Span::raw("  "),
         hint("Ctrl+C", "quit"),
-    ]))
-    .style(Style::default().fg(DIM));
-    frame.render_widget(hints, horiz(vert[3]));
+    ]);
 }
 
 fn draw_chat(frame: &mut Frame, app: &mut App) {

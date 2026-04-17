@@ -697,7 +697,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             frame.render_widget(Paragraph::new(Line::from(vec![
                 Span::styled(format!("  {} ", SPINNER[frame_i]), Style::default().fg(ACCENT)),
                 Span::styled("warming up KV cache", Style::default().fg(DIM)),
-                Span::styled(format!("  {elapsed:.1}s"), Style::default().fg(THINKING_COLOR)),
+                Span::styled(format!("  {}", format_duration(elapsed)), Style::default().fg(THINKING_COLOR)),
             ])), chunks[2]);
         }
     }

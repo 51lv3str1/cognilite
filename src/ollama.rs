@@ -81,6 +81,27 @@ pub fn list_models(base_url: &str) -> Result<Vec<ModelEntry>, String> {
     }).collect())
 }
 
+pub fn warmup(base_url: &str, model: String, system_prompt: String, num_ctx: Option<u64>, keep_alive: bool) {
+    let url = format!("{}/api/chat", base_url);
+    let mut options = serde_json::json!({ "num_predict": 1 });
+    if let Some(ctx) = num_ctx {
+        options["num_ctx"] = serde_json::json!(ctx);
+    }
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user",   "content": " " },
+        ],
+        "stream": false,
+        "options": options,
+    });
+    if keep_alive {
+        body["keep_alive"] = serde_json::json!(-1);
+    }
+    let _ = ureq::post(&url).send_json(body);
+}
+
 pub fn stream_chat(
     base_url: &str,
     model: String,

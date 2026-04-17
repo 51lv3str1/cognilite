@@ -330,6 +330,23 @@ impl App {
             self.auto_scroll = true;
             self.stream_state = StreamState::Idle;
             self.screen = Screen::Chat;
+
+            if !self.tool_context.is_empty() {
+                let num_ctx = match self.ctx_strategy {
+                    CtxStrategy::Full => self.context_length,
+                    CtxStrategy::Dynamic => self.context_length.map(|max| {
+                        let rounded = if self.ctx_pow2 { 8192u64.next_power_of_two() } else { 8192 };
+                        rounded.min(max)
+                    }),
+                };
+                let base_url     = self.base_url.clone();
+                let model        = name.clone();
+                let tool_context = self.tool_context.clone();
+                let keep_alive   = self.keep_alive;
+                std::thread::spawn(move || {
+                    crate::ollama::warmup(&base_url, model, tool_context, num_ctx, keep_alive);
+                });
+            }
         }
     }
 

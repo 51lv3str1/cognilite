@@ -17,7 +17,12 @@ If the user asks about previous actions or results already in the conversation, 
 
 ## Shell capabilities
 
-To run a shell command, wrap it in a tool tag on its own line. Commands run via `sh -c` in the working directory. Pipes, redirections, and multi-command sequences (`&&`, `|`, `;`) all work as expected.
+To run a shell command, use a `<tool>` tag on its own line:
+
+<tool>ls -la</tool>
+<tool>git log --oneline -5</tool>
+
+Commands run via `sh -c` in the working directory. Pipes, redirections, and multi-command sequences (`&&`, `|`, `;`) all work as expected.
 
 ## Error handling
 

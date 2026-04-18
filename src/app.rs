@@ -1,4 +1,5 @@
 use std::sync::{mpsc, OnceLock};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -151,6 +152,8 @@ pub struct FilePicker {
     pub query: String,
     pub preview: Vec<Line<'static>>,
     pub preview_scroll: usize,
+    pub pending_path: Option<PathBuf>,
+    pub highlight_rx: Option<mpsc::Receiver<(PathBuf, Vec<Line<'static>>)>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -303,6 +306,8 @@ pub struct App {
     // file panel (right-side code viewer)
     pub file_panel: Option<FilePanel>,
     pub file_panel_attachment: Option<(usize, usize)>, // (msg_idx, att_idx)
+    // highlight cache: path → (mtime, highlighted lines)
+    pub highlight_cache: HashMap<PathBuf, (std::time::SystemTime, Vec<Line<'static>>)>,
 }
 
 impl App {
@@ -390,7 +395,17 @@ impl App {
             file_picker: None,
             file_panel: None,
             file_panel_attachment: None,
+            highlight_cache: HashMap::new(),
         }
+    }
+
+    /// Initialize syntect's SyntaxSet and ThemeSet in a background thread so the
+    /// first file preview doesn't block the UI.
+    pub fn prewarm_highlight() {
+        std::thread::spawn(|| {
+            SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+            THEME_SET.get_or_init(ThemeSet::load_defaults);
+        });
     }
 
     pub fn confirm_config(&mut self) {
@@ -1016,6 +1031,7 @@ impl App {
         self.file_picker = Some(FilePicker {
             current_dir: dir, entries, cursor: 0, query: String::new(),
             preview: vec![], preview_scroll: 0,
+            pending_path: None, highlight_rx: None,
         });
         self.update_preview();
     }
@@ -1031,7 +1047,14 @@ impl App {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| path.to_string_lossy().to_string());
         let mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
-        let lines = highlight_file(&path);
+        let lines = if let Some((cached_mt, cached_lines)) = self.highlight_cache.get(&path) {
+            if Some(*cached_mt) == mtime { cached_lines.clone() } else { highlight_file(&path) }
+        } else {
+            highlight_file(&path)
+        };
+        if let Some(mt) = mtime {
+            self.highlight_cache.insert(path.clone(), (mt, lines.clone()));
+        }
         self.file_panel = Some(FilePanel { path, display_path, lines, scroll: 0, mtime, reloaded_at: None });
     }
 
@@ -1047,6 +1070,9 @@ impl App {
         let new_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
         if new_mtime.is_some() && new_mtime != old_mtime {
             let lines = highlight_file(&path);
+            if let Some(mt) = new_mtime {
+                self.highlight_cache.insert(path, (mt, lines.clone()));
+            }
             if let Some(fp) = &mut self.file_panel {
                 fp.lines = lines;
                 fp.mtime = new_mtime;
@@ -1208,12 +1234,68 @@ impl App {
 
     pub fn update_preview(&mut self) {
         let path = self.file_picker_selected_path();
-        let Some(fp) = &mut self.file_picker else { return };
-        fp.preview_scroll = 0;
-        fp.preview = match path {
-            Some(p) => highlight_file(&p),
-            None    => vec![],
+
+        // No file selected — clear preview
+        let Some(path) = path else {
+            if let Some(fp) = &mut self.file_picker {
+                fp.preview = vec![];
+                fp.preview_scroll = 0;
+                fp.pending_path = None;
+            }
+            return;
         };
+
+        let mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+
+        // Cache hit — instant, no thread needed
+        if let Some((cached_mt, cached_lines)) = self.highlight_cache.get(&path) {
+            if Some(*cached_mt) == mtime {
+                let lines = cached_lines.clone();
+                if let Some(fp) = &mut self.file_picker {
+                    fp.preview = lines;
+                    fp.preview_scroll = 0;
+                    fp.pending_path = None;
+                }
+                return;
+            }
+        }
+
+        // Cache miss — show spinner, highlight in background
+        let fp = self.file_picker.as_mut().unwrap();
+        fp.preview = vec![Line::from(Span::styled(
+            "  ⟳ loading...".to_string(),
+            Style::default().fg(Color::Rgb(88, 91, 112)),
+        ))];
+        fp.preview_scroll = 0;
+        fp.pending_path = Some(path.clone());
+
+        let (tx, rx) = mpsc::channel();
+        fp.highlight_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send((path.clone(), highlight_file(&path)));
+        });
+    }
+
+    /// Poll the background highlight channel; update preview and cache when done.
+    pub fn poll_highlight(&mut self) {
+        let result = {
+            let Some(fp) = &self.file_picker else { return };
+            let Some(rx) = &fp.highlight_rx else { return };
+            rx.try_recv().ok()
+        };
+        if let Some((path, lines)) = result {
+            let mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+            if let Some(mt) = mtime {
+                self.highlight_cache.insert(path.clone(), (mt, lines.clone()));
+            }
+            if let Some(fp) = &mut self.file_picker {
+                if fp.pending_path.as_ref() == Some(&path) {
+                    fp.preview = lines;
+                    fp.highlight_rx = None;
+                    fp.pending_path = None;
+                }
+            }
+        }
     }
 
     // --- synapse execution ---
@@ -1815,7 +1897,7 @@ fn highlight_file(path: &Path) -> Vec<Line<'static>> {
     let mut h = HighlightLines::new(syntax, theme);
     let mut result = Vec::new();
 
-    for (i, line) in LinesWithEndings::from(&content).enumerate().take(2000) {
+    for (i, line) in LinesWithEndings::from(&content).enumerate().take(500) {
         let ranges = match h.highlight_line(line, ss) {
             Ok(r) => r,
             Err(_) => continue,

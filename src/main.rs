@@ -17,6 +17,7 @@ fn main() -> Result<()> {
     ratatui::run(|terminal| {
         crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
         let mut app = App::new(OLLAMA_BASE_URL.to_string());
+        App::prewarm_highlight();
         load_models(&mut app);
         let result = run_loop(terminal, &mut app);
         let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
@@ -42,6 +43,7 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> color_eyr
     loop {
         app.poll_warmup();
         app.poll_stream();
+        app.poll_highlight();
         app.check_pinned_files();
         app.check_file_panel();
         terminal.draw(|frame| ui::draw(frame, app))?;

@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
-use crate::app::{App, ChatFocus, CtxStrategy, Role, Screen, StreamState};
+use crate::app::{App, AskKind, ChatFocus, CtxStrategy, Role, Screen, StreamState};
 
 const ACCENT: Color = Color::Rgb(137, 180, 250);  // blue
 const USER_COLOR: Color = Color::Rgb(166, 227, 161); // green
@@ -422,14 +422,23 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     let input_inner_width = area.width.saturating_sub(4);
     let input_height = (visual_line_count(&app.input, input_inner_width) + 2).min(10);
     let warming_up = app.warmup_rx.is_some();
+    let (ask_height, hide_input) = match &app.ask {
+        None => (0u16, false),
+        Some(r) => match &r.kind {
+            AskKind::Text    => (0,                                        false),
+            AskKind::Confirm => (1,                                        true),
+            AskKind::Choice(opts) => (opts.len().min(8) as u16 + 2,       true),
+        }
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),                                    // header
-            Constraint::Fill(1),                                      // messages
-            Constraint::Length(if warming_up { 1 } else { 0 }),      // warmup status bar
-            Constraint::Length(input_height),                         // input (dynamic)
-            Constraint::Length(1),                                    // hints
+            Constraint::Length(1),                                         // [0] header
+            Constraint::Fill(1),                                           // [1] messages
+            Constraint::Length(if warming_up { 1 } else { 0 }),           // [2] warmup
+            Constraint::Length(ask_height),                                // [3] ask widget
+            Constraint::Length(if hide_input { 0 } else { input_height }), // [4] input
+            Constraint::Length(1),                                         // [5] hints
         ])
         .split(area);
 
@@ -716,13 +725,23 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     frame.render_widget(messages_widget, msg_area);
 
     // --- input ---
-    let input_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(
-            if app.stream_state == StreamState::Streaming || history_mode { DIM } else { ACCENT }
-        ))
-        .style(Style::default().bg(BG));
+    let ask_text_title: Option<String> = app.ask.as_ref().and_then(|a| {
+        if let AskKind::Text = &a.kind {
+            let q: String = a.question.chars().take(50).collect();
+            Some(format!(" ⬡ {q} "))
+        } else { None }
+    });
+    let input_border_color = if app.stream_state == StreamState::Streaming || history_mode { DIM } else { ACCENT };
+    let input_block = {
+        let b = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(input_border_color))
+            .style(Style::default().bg(BG));
+        if let Some(ref t) = ask_text_title {
+            b.title(Span::styled(t.clone(), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+        } else { b }
+    };
 
     let input_widget = if app.input.is_empty() && app.stream_state == StreamState::Streaming {
         Paragraph::new(Line::from(Span::styled("Waiting for response…", Style::default().fg(DIM))))
@@ -777,27 +796,76 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    frame.render_widget(input_widget, chunks[3]);
+    // --- ask widget ---
+    if let Some(ref ask) = app.ask {
+        match &ask.kind {
+            AskKind::Text => {} // handled via input box title below
+            AskKind::Confirm => {
+                frame.render_widget(Paragraph::new(Line::from(vec![
+                    Span::styled("  ⬡  ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                    Span::styled(ask.question.clone(), Style::default().fg(Color::White)),
+                ])).style(Style::default().bg(BG)), chunks[3]);
+            }
+            AskKind::Choice(options) => {
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(ACCENT))
+                    .style(Style::default().bg(BG));
+                let inner = Rect {
+                    x: chunks[3].x + 1,
+                    y: chunks[3].y + 1,
+                    width: chunks[3].width.saturating_sub(2),
+                    height: chunks[3].height.saturating_sub(2),
+                };
+                frame.render_widget(block, chunks[3]);
+                for (i, opt) in options.iter().enumerate().take(8) {
+                    let selected = i == app.ask_cursor;
+                    let (marker, opt_style) = if selected {
+                        ("● ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+                    } else {
+                        ("○ ", Style::default().fg(Color::White))
+                    };
+                    let marker_style = if selected { Style::default().fg(ACCENT) } else { Style::default().fg(DIM) };
+                    frame.render_widget(Paragraph::new(Line::from(vec![
+                        Span::styled(format!("  {marker}"), marker_style),
+                        Span::styled(opt.clone(), opt_style),
+                    ])), Rect { x: inner.x, y: inner.y + i as u16, width: inner.width, height: 1 });
+                }
+            }
+        }
+    }
+
+    frame.render_widget(input_widget, chunks[4]);
 
     // place cursor in 2D using visual coordinates
-    if app.stream_state != StreamState::Streaming && !history_mode {
+    let show_cursor = app.stream_state != StreamState::Streaming
+        && !history_mode
+        && app.ask.as_ref().map(|a| matches!(&a.kind, AskKind::Text)).unwrap_or(true);
+    if show_cursor {
         let (vcur_row, vcur_col) = input_visual_cursor(&app.input, app.cursor_pos, input_inner_width);
         let visible_rows = (input_height - 2) as usize;
         let input_scroll = vcur_row.saturating_sub(visible_rows.saturating_sub(1));
         let visual_row = vcur_row - input_scroll;
         let prefix_len: u16 = 2; // "> " or "  "
-        let x = chunks[3].x + 1 + prefix_len + vcur_col as u16;
-        let y = chunks[3].y + 1 + visual_row as u16;
-        frame.set_cursor_position((x.min(chunks[3].x + chunks[3].width - 2), y));
+        let x = chunks[4].x + 1 + prefix_len + vcur_col as u16;
+        let y = chunks[4].y + 1 + visual_row as u16;
+        frame.set_cursor_position((x.min(chunks[4].x + chunks[4].width - 2), y));
     }
 
     // --- completion popup ---
     if app.completion.is_some() {
-        draw_completion_popup(frame, app, chunks[3]);
+        draw_completion_popup(frame, app, chunks[4]);
     }
 
     // --- hints ---
-    let hints_line = if history_mode {
+    let hints_line = if let Some(ref ask) = app.ask {
+        match &ask.kind {
+            AskKind::Text    => Line::from(vec![hint("Enter", "submit"), Span::raw("  "), hint("Esc", "cancel")]),
+            AskKind::Confirm => Line::from(vec![hint("y/Enter", "Yes"),  Span::raw("  "), hint("Esc/n", "No")]),
+            AskKind::Choice(_) => Line::from(vec![hint("↑/↓", "navigate"), Span::raw("  "), hint("Enter", "select"), Span::raw("  "), hint("Esc", "cancel")]),
+        }
+    } else if history_mode {
         Line::from(vec![
             hint("↑/↓", "navigate"),
             Span::raw("  "),
@@ -820,7 +888,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         ])
     };
     let hints = Paragraph::new(hints_line).style(Style::default().fg(DIM));
-    frame.render_widget(hints, chunks[4]);
+    frame.render_widget(hints, chunks[5]);
 
     // --- help popup ---
     if app.show_help {

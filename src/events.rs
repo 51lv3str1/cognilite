@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use crate::app::{App, ChatFocus, Screen, StreamState, fuzzy_match};
+use crate::app::{App, AskKind, ChatFocus, Screen, StreamState, fuzzy_match};
 
 fn nav_prev(cursor: &mut usize, filtered: &[usize]) {
     if let Some(pos) = filtered.iter().position(|&i| i == *cursor) {
@@ -212,6 +212,49 @@ fn handle_model_select(app: &mut App, key: KeyEvent) {
 
 fn handle_chat(app: &mut App, key: KeyEvent) {
     if handle_help_keys(app, key) { return; }
+
+    // Ask mode intercepts all keys when awaiting user input
+    if app.ask.is_some() {
+        let (kind_tag, opts_len, selected) = {
+            let a = app.ask.as_ref().unwrap();
+            match &a.kind {
+                AskKind::Text    => ("text",    0usize, String::new()),
+                AskKind::Confirm => ("confirm", 0,      String::new()),
+                AskKind::Choice(opts) => {
+                    let sel = opts.get(app.ask_cursor).cloned().unwrap_or_default();
+                    ("choice", opts.len(), sel)
+                }
+            }
+        };
+        match kind_tag {
+            "confirm" => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => app.submit_ask("Yes".to_string()),
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc   => app.submit_ask("No".to_string()),
+                _ => {}
+            },
+            "choice" => match key.code {
+                KeyCode::Up    => { if app.ask_cursor > 0 { app.ask_cursor -= 1; } }
+                KeyCode::Down  => { if app.ask_cursor + 1 < opts_len { app.ask_cursor += 1; } }
+                KeyCode::Enter => app.submit_ask(selected),
+                KeyCode::Esc   => app.cancel_ask(),
+                _ => {}
+            },
+            _ => match key.code { // text
+                KeyCode::Enter => {
+                    let r = app.input.trim().to_string();
+                    if !r.is_empty() { app.submit_ask(r); }
+                }
+                KeyCode::Esc       => app.cancel_ask(),
+                KeyCode::Backspace => { app.input_backspace(); }
+                KeyCode::Delete    => { app.input_delete(); }
+                KeyCode::Left      => app.input_move_left(),
+                KeyCode::Right     => app.input_move_right(),
+                KeyCode::Char(c)   => { app.input_insert(c); }
+                _ => {}
+            },
+        }
+        return;
+    }
 
     // completion popup intercepts Esc, Tab, Up, Down
     if app.completion.is_some() {

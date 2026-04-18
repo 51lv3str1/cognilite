@@ -162,6 +162,19 @@ pub enum ChatFocus {
     History,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum AskKind {
+    Text,            // free text — user types, Enter submits
+    Confirm,         // yes/no — y/Enter = Yes, n/Esc = No
+    Choice(Vec<String>), // pick one — ↑↓ navigate, Enter selects
+}
+
+#[derive(Debug, Clone)]
+pub struct InputRequest {
+    pub question: String, // shown in UI (empty for Choice — question is in model's preceding text)
+    pub kind: AskKind,
+}
+
 #[derive(Debug)]
 pub struct Completion {
     pub candidates: Vec<String>, // completion strings (paths relative to working_dir or absolute)
@@ -225,6 +238,9 @@ pub struct App {
     // chat focus / history navigation
     pub chat_focus: ChatFocus,
     pub history_cursor: usize, // index into messages[] for selected block
+    // ask / user input requests
+    pub ask: Option<InputRequest>,
+    pub ask_cursor: usize, // selected index for Choice
 }
 
 impl App {
@@ -291,6 +307,8 @@ impl App {
             copy_notice: None,
             chat_focus: ChatFocus::Input,
             history_cursor: 0,
+            ask: None,
+            ask_cursor: 0,
         }
     }
 
@@ -365,6 +383,8 @@ impl App {
             self.stream_state = StreamState::Idle;
             self.chat_focus = ChatFocus::Input;
             self.history_cursor = 0;
+            self.ask = None;
+            self.ask_cursor = 0;
             self.screen = Screen::Chat;
 
             if self.warmup && !self.tool_context.is_empty() {
@@ -575,6 +595,25 @@ impl App {
                                 }
                             }
                         }
+                        // detect <ask> input request tag
+                        let ask_info: Option<(AskKind, String)> = if let Some(last) = self.messages.last() {
+                            if last.role == Role::Assistant { extract_ask_tag(&last.content) } else { None }
+                        } else { None };
+                        if let Some((kind, question)) = ask_info {
+                            if let Some(last) = self.messages.last_mut() {
+                                let scan_from = last.content.rfind("</think>").map(|i| i + 8).unwrap_or(0);
+                                if let Some(p) = last.content[scan_from..].find("<ask") {
+                                    last.content.truncate(scan_from + p);
+                                    last.content = last.content.trim_end().to_string();
+                                }
+                            }
+                            self.stream_state = StreamState::Idle;
+                            self.stream_started_at = None;
+                            self.thinking_end_secs = None;
+                            self.ask = Some(InputRequest { question, kind });
+                            self.ask_cursor = 0;
+                            return;
+                        }
                     }
                     if chunk.done {
                         // attach token stats
@@ -695,6 +734,38 @@ impl App {
         }
     }
 
+    pub fn submit_ask(&mut self, response: String) {
+        let ask = match self.ask.take() { Some(a) => a, None => return };
+        let label = if ask.question.is_empty() {
+            "↩ User selection".to_string()
+        } else {
+            format!("↩ {}", ask.question)
+        };
+        self.messages.push(Message {
+            role: Role::Tool,
+            content: response.clone(),
+            llm_content: format!("User response: {response}"),
+            images: vec![],
+            attachments: vec![],
+            thinking: String::new(),
+            thinking_secs: None,
+            stats: None,
+            tool_call: Some(label),
+        });
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.ask_cursor = 0;
+        self.auto_scroll = true;
+        self.start_stream();
+    }
+
+    pub fn cancel_ask(&mut self) {
+        self.ask = None;
+        self.ask_cursor = 0;
+        self.input.clear();
+        self.cursor_pos = 0;
+    }
+
     pub fn clear_chat(&mut self) {
         self.messages.clear();
         self.scroll = 0;
@@ -702,6 +773,8 @@ impl App {
         self.stream_state = StreamState::Idle;
         self.stream_rx = None;
         self.completion = None;
+        self.ask = None;
+        self.ask_cursor = 0;
     }
 
     // --- synapse execution ---
@@ -1315,6 +1388,39 @@ pub fn resolve_attachments(
 
     let llm_content = llm_parts.join("\n\n");
     (display, llm_content, attachments, images)
+}
+
+/// Detects `<ask>`, `<ask type="confirm">`, `<ask type="choice">` tags in content,
+/// skipping anything inside `<think>` blocks. Returns (kind, question).
+pub fn extract_ask_tag(content: &str) -> Option<(AskKind, String)> {
+    let scan = match content.rfind("</think>") {
+        Some(i) => &content[i + 8..],
+        None => {
+            if content.contains("<think>") { return None; }
+            content
+        }
+    };
+    let open = scan.find("<ask")?;
+    let tag_close = scan[open..].find('>')?;
+    let inner_start = open + tag_close + 1;
+    let close = scan.find("</ask>")?;
+    if close < inner_start { return None; }
+
+    let tag_str = &scan[open..open + tag_close + 1];
+    let inner = scan[inner_start..close].trim();
+
+    if tag_str.contains("type=\"confirm\"") {
+        Some((AskKind::Confirm, inner.to_string()))
+    } else if tag_str.contains("type=\"choice\"") {
+        let options: Vec<String> = inner.split('|')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if options.is_empty() { return None; }
+        Some((AskKind::Choice(options), String::new()))
+    } else {
+        Some((AskKind::Text, inner.to_string()))
+    }
 }
 
 pub fn base64_encode(data: &[u8]) -> String {

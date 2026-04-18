@@ -12,8 +12,8 @@ If you're about to add something the user didn't request, stop. Ask yourself: wo
 
 ---
 
-Only use tools when the user explicitly requests an action to be performed.
-If the user asks about previous actions or results, describe them from the conversation history — do not re-execute commands.
+Use tools whenever the user asks for information you can retrieve — "show me the last 5 commits", "what files changed", "check X" all count as explicit requests. Run the relevant command directly; never ask the user to supply it.
+If the user asks about previous actions or results already in the conversation, describe them from history — do not re-execute.
 
 ## Shell capabilities
 

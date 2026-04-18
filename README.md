@@ -35,19 +35,19 @@ cognilite  ›  gemma4:e2b  ○  😊  ctx 12% / 128k
 - **Streaming responses** — output renders token by token in real time
 - **Thinking model support** — models that emit a `thinking` field (e.g. QwQ, nemotron) show the reasoning block in a muted color with a "thought for Xs" label once finished
 - **Markdown rendering** — `**bold**`, `*italic*`, `` `inline code` ``, headings, and bullet/numbered lists
-- **Code block rendering** — fenced ` ``` ` blocks with language label, `▎` left gutter, and full syntax highlighting via [syntect](https://github.com/trishume/syntect)
+- **Code block rendering** — fenced ` ``` ` blocks with language label, `▎` left gutter, and full syntax highlighting via [syntect](https://github.com/trishume/syntect) + [two-face](https://github.com/CosmicHorrorDev/two-face) (same syntax assets as `bat` — TOML, Dockerfile, env files, and 200+ languages)
 - **Diff rendering** — ` ```diff ` blocks render `+` lines in green and `-` lines in red with colored gutter symbols
 - **File attachments** (`@path` syntax) — attach text files or images with path autocomplete; context-aware size validation and deduplication
 - **File picker** (`Ctrl+P`) — directory-browser popup (oil.nvim style): navigate with arrows, `Enter`/`→` to enter dirs or pin files, `←` to go up; right panel shows a syntax-highlighted preview with `PgUp`/`PgDn` scroll; background highlighting with mtime cache keeps navigation snappy
 - **Pinned files** — files pinned via the picker are injected into the system prompt on every request; mtime-checked each turn so the model always sees the current content; delta diffs are prepended when a file changes
-- **File panel** — enter history mode (`Tab`), navigate to a message with file attachments, and press `Enter` to open a right-side syntax-highlighted viewer; cycles through attachments, updates live when the file changes on disk (`↺` indicator), `PgUp`/`PgDn` to scroll, `q` to close
+- **File panel** — enter history mode (`Tab`), navigate to a message with file attachments, and press `Enter` to open a right-side syntax-highlighted viewer; `Tab` again focuses the panel (border turns highlighted); `PgUp`/`PgDn` scrolls whichever panel has focus; `Ctrl+B` hides/shows the panel without losing the loaded file; cycles through attachments, updates live when the file changes on disk (`↺` indicator); `q`/`Esc` closes
 - **Prompt templates** (`/name` syntax) — type `/` at the start of the input to pick a saved prompt template from a fuzzy-searchable popup; templates live in `.cognilite/templates/` or `~/.config/cognilite/templates/`
 - **Neurons** — markdown instructions and shell tools loaded from `.cognilite/neurons/` that extend the model's capabilities and shape its behavior
 - **Tool execution loop** — model emits `<tool>command</tool>`; cognilite runs it, injects the result, and resumes the stream
 - **Patch application** — model emits `<patch>unified diff</patch>`; cognilite renders the diff, asks for confirmation, and applies it with `patch -p1`
 - **Model-driven user input** — model emits `<ask>`, `<ask type="confirm">`, or `<ask type="choice">` to pause and request input; cognilite shows the appropriate UI widget and injects the response
 - **Mood reporting** — model emits `<mood>😊</mood>` to surface its functional state; the emoji appears in the chat header
-- **KV cache warm-up** — pre-fills the KV cache with the system prompt on model selection so the first message skips full re-evaluation (critical on CPU-only hardware)
+- **KV cache warm-up** — pre-fills the KV cache with the system prompt on model selection so the first message skips full re-evaluation (critical on CPU-only hardware); deduplicates by hashing the system prompt so toggling a neuron twice doesn't re-warm needlessly
 - **Context window tracking** — header shows `ctx X% / Nk`; color warnings at 80% and 90%
 - **Token stats** — after each response: `tok/s · response tokens · prompt eval · wall time`
 - **History mode** — `Tab` enters a block-navigation mode over the message list; `Ctrl+Y` copies the selected block; `Esc`/`Tab` returns to input
@@ -141,7 +141,8 @@ cargo build --release
 |-----|--------|
 | `↑` (single-line input) | Previous sent message |
 | `↓` (in history) | Next message / restore draft |
-| `Alt+↑` / `Alt+↓` | Scroll message list |
+| `PgUp` / `PgDn` | Scroll message list |
+| `Alt+↑` / `Alt+↓` | Scroll message list one line |
 | `Ctrl+End` | Jump to bottom, re-enable auto-scroll |
 
 #### Other
@@ -149,6 +150,7 @@ cargo build --release
 | Key | Action |
 |-----|--------|
 | `Tab` | Enter history mode |
+| `Ctrl+B` | Hide / show file panel |
 | `Ctrl+Y` | Copy last response (input) / copy selected block (history) |
 | `Ctrl+L` | Clear conversation |
 | `Ctrl+P` | Open file picker (pin files to context) |
@@ -163,10 +165,20 @@ Entered with `Tab` from the chat input. Highlights message blocks one at a time.
 |-----|--------|
 | `↑` / `↓` | Navigate message blocks |
 | `Enter` | Open / cycle file attachments in the file panel |
+| `PgUp` / `PgDn` | Scroll chat |
 | `q` | Close file panel |
-| `PgUp` / `PgDn` | Scroll file panel |
 | `Ctrl+Y` | Copy selected block to clipboard |
-| `Tab` / `Esc` | Return to input |
+| `Tab` | Focus file panel (when visible) |
+| `Esc` | Return to input |
+
+### File panel
+
+| Key | Action |
+|-----|--------|
+| `PgUp` / `PgDn` | Scroll file panel |
+| `Ctrl+B` | Hide / show panel (preserves loaded file) |
+| `q` / `Esc` | Close file panel |
+| `Tab` | Return to input |
 
 ### File picker (`Ctrl+P`)
 
@@ -231,9 +243,13 @@ Pinned files appear as chips in the header bar. When a file changes on disk (det
 
 In history mode (`Tab`), navigate to a user message that has file attachments. Press `Enter` to open the file in a right-side panel (40% width). Pressing `Enter` again cycles through all text attachments in that message.
 
-The panel shows syntax-highlighted content with line numbers, scrollable with `PgUp`/`PgDn`. If the file changes on disk while the panel is open, it reloads automatically and shows a `↺` indicator for two seconds. Press `q` to close.
+The panel shows syntax-highlighted content with line numbers (powered by the same syntax assets as `bat`). Press `Tab` again to focus the panel — its border turns highlighted and `PgUp`/`PgDn` scrolls the panel instead of the chat. `Tab` from the panel returns to the input.
 
-The active attachment chip in the message list is highlighted to show which file is currently open.
+Use `Ctrl+B` to hide or show the panel without losing the loaded file — the split collapses and the chat takes full width, then restores instantly when toggled back.
+
+If the file changes on disk while the panel is open, it reloads automatically and shows a `↺` indicator for two seconds.
+
+Press `q` or `Esc` (when panel is focused) to close. The active attachment chip in the message list is highlighted to show which file is currently open.
 
 ## Prompt Templates (`/name`)
 
@@ -371,7 +387,7 @@ Open with `Tab` from the model select screen. Persisted to `~/.config/cognilite/
 
 ### Neurons tab
 
-Toggle individual neurons on or off. Disabled neurons are excluded from the system prompt.
+Toggle individual neurons on or off. Disabled neurons are excluded from the system prompt. Each neuron shows an estimated token cost (`~Ntok`) so you can see which ones are heavy before enabling them.
 
 ### Generation tab
 
@@ -430,7 +446,7 @@ struct App {
     neurons: Vec<Neuron>,
     templates: Vec<(String, String)>,
     tool_context: String,
-    chat_focus: ChatFocus,          // Input | History
+    chat_focus: ChatFocus,          // Input | History | FilePanel
     history_cursor: usize,
     ask: Option<InputRequest>,
     pending_patch: Option<String>,

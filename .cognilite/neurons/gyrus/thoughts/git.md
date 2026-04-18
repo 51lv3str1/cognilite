@@ -1,11 +1,12 @@
 Always run git commands and answer from the real output — never guess.
 
+Reference commands (run only when relevant, with the actual arguments needed):
 ```
 git status --short
 git diff / git diff --staged
-git log --oneline -20
-git log --oneline -10 -- path/to/file
-git diff HEAD~1 -- path/to/file
+git log --oneline -N
+git log --oneline -N -- path/to/file
+git diff HEAD~N -- path/to/file
 git diff | head -100
 ```
 

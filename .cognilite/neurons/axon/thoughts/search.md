@@ -8,16 +8,16 @@ find . -name "*.rs" -not -path "*/target/*"      # files by type
 ```
 Always use `-n`. Always exclude `*/target/*`, `*/.git/*`, `*/node_modules/*`. Pipe to `| head -60` if output may be large.
 
-**Patch** — propose changes as unified diffs:
+**Patch** — propose changes as unified diffs (format reference, not a real patch):
 ```
 <patch>
---- a/src/app.rs
-+++ b/src/app.rs
-@@ -42,3 +42,4 @@
- context
--old
-+new
- context
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ -LINE,3 +LINE,4 @@
+ context line
+-line to remove
++line to add
+ context line
 </patch>
 ```
 Use `a/`/`b/` prefixes · 3 context lines · read file first · one patch per response.

@@ -793,7 +793,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             Some(format!(" ⬡ {q} "))
         } else { None }
     });
-    let input_border_color = if app.stream_state == StreamState::Streaming || history_mode { DIM } else { ACCENT };
+    let input_border_color = if app.stream_state == StreamState::Streaming || app.chat_focus != ChatFocus::Input { DIM } else { ACCENT };
     let input_block = {
         let b = Block::default()
             .borders(Borders::ALL)
@@ -941,6 +941,14 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             AskKind::Confirm => Line::from(vec![hint("y/Enter", "Yes"),  Span::raw("  "), hint("Esc/n", "No")]),
             AskKind::Choice(_) => Line::from(vec![hint("↑/↓", "navigate"), Span::raw("  "), hint("Enter", "select"), Span::raw("  "), hint("Esc", "cancel")]),
         }
+    } else if app.chat_focus == ChatFocus::FilePanel {
+        Line::from(vec![
+            hint("PgUp/Dn", "scroll"),
+            Span::raw("  "),
+            hint("q/Esc", "close"),
+            Span::raw("  "),
+            hint("Tab", "→ input"),
+        ])
     } else if history_mode {
         if app.file_panel.is_some() {
             Line::from(vec![
@@ -948,11 +956,12 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 Span::raw("  "),
                 hint("Enter", "cycle file"),
                 Span::raw("  "),
-                hint("PgUp/Dn", "scroll preview"),
+                hint("PgUp/Dn", "scroll chat"),
                 Span::raw("  "),
                 hint("q", "close preview"),
                 Span::raw("  "),
-                hint("Tab/Esc", "back to input"),
+                hint("Tab", "→ preview  "),
+                hint("Esc", "→ input"),
             ])
         } else {
             Line::from(vec![
@@ -962,7 +971,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 Span::raw("  "),
                 hint("Ctrl+Y", "copy block"),
                 Span::raw("  "),
-                hint("Tab/Esc", "back to input"),
+                hint("Tab/Esc", "→ input"),
             ])
         }
     } else {
@@ -1039,12 +1048,19 @@ fn draw_file_panel(frame: &mut Frame, app: &App, area: Rect) {
         title_spans.push(Span::styled("↺ ", Style::default().fg(USER_COLOR)));
     }
 
+    let focused = app.chat_focus == crate::app::ChatFocus::FilePanel;
+    let border_color = if focused { ACCENT } else { DIM };
+    let hint = if focused {
+        " PgUp/PgDn scroll  q/Esc close  Tab → input "
+    } else {
+        " Tab to focus  q close "
+    };
     let block = Block::default()
         .title(Line::from(title_spans))
-        .title_bottom(Span::styled(" PgUp/PgDn scroll  q close ", Style::default().fg(DIM)))
+        .title_bottom(Span::styled(hint, Style::default().fg(DIM)))
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(DIM))
+        .border_type(if focused { BorderType::Rounded } else { BorderType::Plain })
+        .border_style(Style::default().fg(border_color))
         .style(Style::default().bg(BG));
 
     let inner = block.inner(area);

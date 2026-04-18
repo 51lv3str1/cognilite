@@ -212,6 +212,7 @@ pub enum StreamState {
 pub enum ChatFocus {
     Input,
     History,
+    FilePanel,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1081,6 +1082,9 @@ impl App {
     pub fn close_file_panel(&mut self) {
         self.file_panel = None;
         self.file_panel_attachment = None;
+        if self.chat_focus == ChatFocus::FilePanel {
+            self.chat_focus = ChatFocus::Input;
+        }
     }
 
     pub fn check_file_panel(&mut self) {

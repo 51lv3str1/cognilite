@@ -298,24 +298,40 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
     let ctrl  = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt   = key.modifiers.contains(KeyModifiers::ALT);
 
-    // File panel scroll — PageUp/Down always go to panel when it's open
-    if app.file_panel.is_some() {
+    // FilePanel focus mode
+    if app.chat_focus == ChatFocus::FilePanel {
         match key.code {
-            KeyCode::PageUp   => { app.file_panel_scroll_up();   return; }
-            KeyCode::PageDown => { app.file_panel_scroll_down(); return; }
+            KeyCode::Tab => {
+                app.chat_focus = ChatFocus::Input;
+                app.auto_scroll = true;
+            }
+            KeyCode::Esc | KeyCode::Char('q') => app.close_file_panel(),
+            KeyCode::PageUp   => app.file_panel_scroll_up(),
+            KeyCode::PageDown => app.file_panel_scroll_down(),
             _ => {}
         }
+        return;
     }
 
-    // History focus mode: navigate blocks, copy selected, Esc/Tab back to input
+    // History focus mode: navigate blocks, copy selected, Tab cycles to file panel or input
     if app.chat_focus == ChatFocus::History {
         match key.code {
-            KeyCode::Esc | KeyCode::Tab => {
+            KeyCode::Tab => {
+                if app.file_panel.is_some() {
+                    app.chat_focus = ChatFocus::FilePanel;
+                } else {
+                    app.chat_focus = ChatFocus::Input;
+                    app.auto_scroll = true;
+                }
+            }
+            KeyCode::Esc => {
                 app.chat_focus = ChatFocus::Input;
                 app.auto_scroll = true;
             }
             KeyCode::Up   => app.history_nav_prev(),
             KeyCode::Down => app.history_nav_next(),
+            KeyCode::PageUp   => { app.auto_scroll = false; app.scroll = app.scroll.saturating_sub(10); }
+            KeyCode::PageDown => { app.scroll = app.scroll.saturating_add(10); }
             KeyCode::Enter => app.cycle_message_attachment(),
             KeyCode::Char('q') => app.close_file_panel(),
             KeyCode::Char('y') if ctrl => app.copy_block(app.history_cursor),

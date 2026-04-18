@@ -1,7 +1,7 @@
 # cognilite
 
-Lightweight terminal UI for chatting with local [Ollama](https://ollama.com) models.
-Built in Rust with [ratatui](https://ratatui.rs). No async runtime, no heavy dependencies — single ~2.5 MB binary.
+Terminal UI for chatting with local [Ollama](https://ollama.com) models.
+Built in Rust with [ratatui](https://ratatui.rs). No async runtime, no cloud, no API keys.
 
 ```
 cognilite  ›  gemma4:e2b  ○  😊  ctx 12% / 128k
@@ -9,6 +9,7 @@ cognilite  ›  gemma4:e2b  ○  😊  ctx 12% / 128k
 │                                                          │
 │ You                                                      │
 │   @src/app.rs what does the streaming loop do?           │
+│   [≡ app.rs  18.4KB]                                     │
 │                                                          │
 │ Assistant                                                │
 │   Let me check.                                          │
@@ -34,9 +35,12 @@ cognilite  ›  gemma4:e2b  ○  😊  ctx 12% / 128k
 - **Streaming responses** — output renders token by token in real time
 - **Thinking model support** — models that emit a `thinking` field (e.g. QwQ, nemotron) show the reasoning block in a muted color with a "thought for Xs" label once finished
 - **Markdown rendering** — `**bold**`, `*italic*`, `` `inline code` ``, headings, and bullet/numbered lists
-- **Code block rendering** — fenced ` ``` ` blocks with language label and `▎` left gutter
+- **Code block rendering** — fenced ` ``` ` blocks with language label, `▎` left gutter, and full syntax highlighting via [syntect](https://github.com/trishume/syntect)
 - **Diff rendering** — ` ```diff ` blocks render `+` lines in green and `-` lines in red with colored gutter symbols
 - **File attachments** (`@path` syntax) — attach text files or images with path autocomplete; context-aware size validation and deduplication
+- **File picker** (`Ctrl+P`) — directory-browser popup (oil.nvim style): navigate with arrows, `Enter`/`→` to enter dirs or pin files, `←` to go up; right panel shows a syntax-highlighted preview with `PgUp`/`PgDn` scroll; background highlighting with mtime cache keeps navigation snappy
+- **Pinned files** — files pinned via the picker are injected into the system prompt on every request; mtime-checked each turn so the model always sees the current content; delta diffs are prepended when a file changes
+- **File panel** — enter history mode (`Tab`), navigate to a message with file attachments, and press `Enter` to open a right-side syntax-highlighted viewer; cycles through attachments, updates live when the file changes on disk (`↺` indicator), `PgUp`/`PgDn` to scroll, `q` to close
 - **Prompt templates** (`/name` syntax) — type `/` at the start of the input to pick a saved prompt template from a fuzzy-searchable popup; templates live in `.cognilite/templates/` or `~/.config/cognilite/templates/`
 - **Neurons** — markdown instructions and shell tools loaded from `.cognilite/neurons/` that extend the model's capabilities and shape its behavior
 - **Tool execution loop** — model emits `<tool>command</tool>`; cognilite runs it, injects the result, and resumes the stream
@@ -66,7 +70,7 @@ cognilite  ›  gemma4:e2b  ○  😊  ctx 12% / 128k
 # development
 cargo run
 
-# optimized release (~2.5 MB stripped binary)
+# optimized release
 cargo build --release
 ./target/release/cognilite
 ```
@@ -138,16 +142,16 @@ cargo build --release
 | `↑` (single-line input) | Previous sent message |
 | `↓` (in history) | Next message / restore draft |
 | `Alt+↑` / `Alt+↓` | Scroll message list |
-| `Page Up` / `Page Down` | Scroll message list (10 lines) |
 | `Ctrl+End` | Jump to bottom, re-enable auto-scroll |
 
 #### Other
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Enter history mode (navigate and copy message blocks) |
-| `Ctrl+Y` | Copy last response (input mode) / copy selected block (history mode) |
+| `Tab` | Enter history mode |
+| `Ctrl+Y` | Copy last response (input) / copy selected block (history) |
 | `Ctrl+L` | Clear conversation |
+| `Ctrl+P` | Open file picker (pin files to context) |
 | `F1` | Toggle keyboard shortcut help popup |
 | `Ctrl+C` | Quit |
 
@@ -158,12 +162,26 @@ Entered with `Tab` from the chat input. Highlights message blocks one at a time.
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate message blocks |
+| `Enter` | Open / cycle file attachments in the file panel |
+| `q` | Close file panel |
+| `PgUp` / `PgDn` | Scroll file panel |
 | `Ctrl+Y` | Copy selected block to clipboard |
 | `Tab` / `Esc` | Return to input |
 
+### File picker (`Ctrl+P`)
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Navigate entries |
+| `Enter` / `→` | Enter directory / toggle pin on file |
+| `←` / `Backspace` | Go up one directory (clears filter first) |
+| `PgUp` / `PgDn` | Scroll preview panel |
+| `Type` | Filter entries in current directory |
+| `Esc` | Close picker |
+
 ### Autocomplete popups
 
-Both popups share the same keys:
+Both `@path` and `/template` popups share the same keys:
 
 | Key | Action |
 |-----|--------|
@@ -171,9 +189,9 @@ Both popups share the same keys:
 | `Enter` / `Tab` | Accept selection |
 | `Esc` | Dismiss popup |
 
-**`@path`** — triggered when typing `@` anywhere in the input. Completes file and directory paths relative to the working directory. Directories stay open for further navigation.
+**`@path`** — triggered when typing `@` anywhere in the input. Completes file and directory paths relative to the working directory.
 
-**`/template`** — triggered when typing `/` at the start of the input or a new line. Shows available prompt templates. Accepting a template replaces `/name` with the full template text, which can be edited before sending.
+**`/template`** — triggered when typing `/` at the start of the input or a new line. Shows available prompt templates. Accepting a template replaces `/name` with the full template text.
 
 ## File Attachments (`@path`)
 
@@ -200,6 +218,22 @@ Type `@` followed by a file path anywhere in your message:
 **Size limit:** rejected only if the estimated token cost exceeds the remaining context window.
 
 **Deduplication:** attaching the same path twice is silently collapsed to one attachment.
+
+## Pinned Files (`Ctrl+P`)
+
+Pinned files are injected into the **system prompt** on every request, which means Ollama can reuse the KV cache across turns — the model doesn't re-evaluate them unless the content changes.
+
+Open the picker with `Ctrl+P`. Navigate directories with arrows, `Enter`/`→` to descend, `←` to go up. Press `Enter` on a file to toggle its pin state. The right panel shows a syntax-highlighted preview; `PgUp`/`PgDn` scrolls it.
+
+Pinned files appear as chips in the header bar. When a file changes on disk (detected by mtime each turn), a diff is prepended to the next message so the model sees exactly what changed without re-reading the whole file.
+
+## File Panel
+
+In history mode (`Tab`), navigate to a user message that has file attachments. Press `Enter` to open the file in a right-side panel (40% width). Pressing `Enter` again cycles through all text attachments in that message.
+
+The panel shows syntax-highlighted content with line numbers, scrollable with `PgUp`/`PgDn`. If the file changes on disk while the panel is open, it reloads automatically and shows a `↺` indicator for two seconds. Press `q` to close.
+
+The active attachment chip in the message list is highlighted to show which file is currently open.
 
 ## Prompt Templates (`/name`)
 
@@ -272,13 +306,13 @@ When the model outputs `<tool>command args</tool>`, cognilite runs the command v
 
 | Neuron | Description |
 |--------|-------------|
-| `Cortex` | Project-level awareness: architecture, conventions, goals |
+| `Cortex` | Project-level awareness: what cognilite is and how to explore it |
 | `Axon` | Code navigation — grep, find, read before modifying; `<patch>` tag usage |
 | `Efferent` | Shell passthrough; simplicity and surgical-change rules; destructive command guard |
 | `Engram` | Self-knowledge: real filesystem access, command execution, transparency |
 | `Gyrus` | Git workflow — log, diff, blame, status |
 | `Synapse` | Tool call protocol — how `<tool>` tags work |
-| `Prefrontal` | Plan-first mode — restate → plan → confirm → execute; surface inconsistencies; push back on over-complexity |
+| `Prefrontal` | Plan-first mode — restate → plan → confirm → execute; surface inconsistencies |
 | `Afferent` | User input protocol — documents `<ask>`, `<ask type="confirm">`, `<ask type="choice">` |
 | `Insula` | Mood reporting — documents `<mood>` tag for surfacing functional state |
 
@@ -362,11 +396,12 @@ Use `←` / `→` to adjust, `r` to reset.
 ```
 src/
 ├── main.rs        — entry point, event loop, model loading
-├── app.rs         — App state, message types, input editing, tag interception, tool/patch/ask/mood loop
+├── app.rs         — App state, message types, input editing, tag interception, tool/patch/ask/mood loop,
+│                    file picker/panel/pinned logic, highlight_code/highlight_file (syntect)
 ├── synapse.rs     — Neuron/Synapse types, directory loader, tool context builder, .toml parser
-├── events.rs      — key event dispatch (config / model select / chat / history / ask modes)
+├── events.rs      — key event dispatch (config / model select / chat / history / ask / picker modes)
 ├── ollama.rs      — Ollama API: list_models, fetch_context_length, stream_chat, warmup
-└── ui.rs          — ratatui rendering: page_layout, config, model select, chat, popups
+└── ui.rs          — ratatui rendering: config, model select, chat, file picker, file panel, popups
 ```
 
 ```
@@ -379,13 +414,13 @@ src/
 
 ```rust
 struct App {
-    screen: Screen,               // Config | ModelSelect | Chat
-    ctx_strategy: CtxStrategy,   // Dynamic | Full
+    screen: Screen,                 // Config | ModelSelect | Chat
+    ctx_strategy: CtxStrategy,     // Dynamic | Full
     messages: Vec<Message>,
     input: String,
     cursor_pos: usize,
     input_history: Vec<String>,
-    stream_state: StreamState,    // Idle | Streaming | Error(String)
+    stream_state: StreamState,      // Idle | Streaming | Error(String)
     stream_rx: Option<Receiver<StreamChunk>>,
     warmup_rx: Option<Receiver<()>>,
     used_tokens: u64,
@@ -393,18 +428,22 @@ struct App {
     working_dir: PathBuf,
     completion: Option<Completion>, // @path or /template popup
     neurons: Vec<Neuron>,
-    templates: Vec<(String, String)>, // (name, body)
+    templates: Vec<(String, String)>,
     tool_context: String,
-    chat_focus: ChatFocus,        // Input | History
-    history_cursor: usize,        // selected block index in history mode
-    ask: Option<InputRequest>,    // pending <ask> from the model
-    ask_cursor: usize,
-    pending_patch: Option<String>, // diff waiting for confirmation
-    current_mood: Option<String>, // emoji from last <mood> tag
+    chat_focus: ChatFocus,          // Input | History
+    history_cursor: usize,
+    ask: Option<InputRequest>,
+    pending_patch: Option<String>,
+    current_mood: Option<String>,
+    pinned_files: Vec<PinnedFile>,
+    file_picker: Option<FilePicker>,
+    file_panel: Option<FilePanel>,
+    highlight_cache: HashMap<PathBuf, (SystemTime, Vec<Line>)>,
 }
 
-enum AskKind { Text, Confirm, Choice(Vec<String>) }
+enum AskKind        { Text, Confirm, Choice(Vec<String>) }
 enum CompletionKind { Path, Template }
+enum FilePickerEntry { Parent, Dir(String), File(String) }
 ```
 
 ### Tag interception in `poll_stream`

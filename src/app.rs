@@ -522,6 +522,11 @@ impl App {
             llm_content = format!("{diff_note}\n\n{llm_content}");
         }
 
+        if let Some(fp) = &self.file_panel {
+            let ui_note = format!("[UI context: the file panel is showing \"{}\"]\n\n", fp.display_path);
+            llm_content = format!("{ui_note}{llm_content}");
+        }
+
         self.messages.push(Message {
             role: Role::User,
             content: display,

@@ -129,6 +129,9 @@ fn run_stream_loop(app: &mut App, auto_yes: bool) -> i32 {
             Some(r) => r,
             None => return 0,
         };
+        // tracks how many bytes of the current assistant message have been printed;
+        // reset each outer iteration so tag stripping from previous turns doesn't bleed over
+        let mut printed_up_to: usize = 0;
 
         loop {
             let chunk = match rx.recv() {
@@ -142,17 +145,24 @@ fn run_stream_loop(app: &mut App, auto_yes: bool) -> i32 {
             }
 
             if let Some(ref msg) = chunk.message {
-                // append and print tokens
+                // accumulate tokens
                 if let Some(last) = app.messages.last_mut() {
                     if last.role == Role::Assistant {
-                        if !msg.content.is_empty() {
-                            print!("{}", msg.content);
-                            let _ = std::io::stdout().flush();
-                        }
                         last.content.push_str(&msg.content);
                         last.llm_content.push_str(&msg.content);
                         if let Some(ref t) = msg.thinking {
                             last.thinking.push_str(t);
+                        }
+                    }
+                }
+                // print only the bytes we haven't printed yet, stopping before any tag prefix
+                if let Some(last) = app.messages.last() {
+                    if last.role == Role::Assistant {
+                        let safe = safe_print_boundary(&last.content, printed_up_to);
+                        if safe > printed_up_to {
+                            print!("{}", &last.content[printed_up_to..safe]);
+                            let _ = std::io::stdout().flush();
+                            printed_up_to = safe;
                         }
                     }
                 }
@@ -346,4 +356,28 @@ fn ask_interactive(kind: &AskKind, question: &str, auto_yes: bool) -> String {
             options.get(n.saturating_sub(1)).cloned().unwrap_or_default()
         }
     }
+}
+
+/// Returns the byte offset up to which `content[from..]` can be safely printed,
+/// stopping before any potential internal tag prefix (<tool>, <load_neuron>, etc.).
+fn safe_print_boundary(content: &str, from: usize) -> usize {
+    let rest = &content[from..];
+    for (i, _) in rest.match_indices('<') {
+        if is_tag_prefix(&rest[i..]) {
+            return from + i;
+        }
+    }
+    content.len()
+}
+
+fn is_tag_prefix(s: &str) -> bool {
+    const TAGS: &[&str] = &[
+        "<tool>", "</tool>",
+        "<load_neuron>", "</load_neuron>",
+        "<ask", "</ask>",
+        "<patch>", "</patch>",
+        "<mood>", "</mood>",
+        "<think>", "</think>",
+    ];
+    TAGS.iter().any(|tag| tag.starts_with(s) || s.starts_with(tag))
 }

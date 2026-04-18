@@ -1,3 +1,3 @@
 name = Efferent
-description = Shell command execution — simplicity rules, error handling, destructive command guard
+description = Shell execution — minimal, safe by default
 shell = true

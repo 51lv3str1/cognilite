@@ -407,7 +407,7 @@ impl App {
     /// first file preview doesn't block the UI.
     pub fn prewarm_highlight() {
         std::thread::spawn(|| {
-            SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+            SYNTAX_SET.get_or_init(|| two_face::syntax::extra_newlines());
             THEME_SET.get_or_init(ThemeSet::load_defaults);
         });
     }
@@ -1945,7 +1945,7 @@ fn resolve_syntax<'a>(ss: &'a SyntaxSet, lang: &str) -> &'a syntect::parsing::Sy
 /// Highlight `code` using the given language tag. Returns one Line per source line.
 /// No line numbers — callers add their own prefix (gutter, line number, etc.).
 pub fn highlight_code(code: &str, lang: &str) -> Vec<Line<'static>> {
-    let ss = SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+    let ss = SYNTAX_SET.get_or_init(|| two_face::syntax::extra_newlines());
     let ts = THEME_SET.get_or_init(ThemeSet::load_defaults);
     let theme = &ts.themes["base16-ocean.dark"];
     let syntax = resolve_syntax(ss, lang);
@@ -1964,7 +1964,7 @@ fn highlight_file(path: &Path) -> Vec<Line<'static>> {
             Style::default().fg(Color::DarkGray),
         ))],
     };
-    let ss = SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+    let ss = SYNTAX_SET.get_or_init(|| two_face::syntax::extra_newlines());
     let ts = THEME_SET.get_or_init(ThemeSet::load_defaults);
     let theme = &ts.themes["base16-ocean.dark"];
     let syntax = ss.find_syntax_for_file(path).ok().flatten()

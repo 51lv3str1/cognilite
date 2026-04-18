@@ -335,6 +335,7 @@ impl App {
     }
 
     pub fn toggle_config(&mut self) {
+        self.show_help = false;
         self.screen = match self.screen {
             Screen::Config => Screen::ModelSelect,
             Screen::ModelSelect => {

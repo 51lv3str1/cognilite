@@ -244,8 +244,33 @@ fn draw_config(frame: &mut Frame, app: &App) {
     };
     let mut hint_spans = vec![hint("↑/↓", "navigate"), Span::raw("  ")];
     hint_spans.extend(action_hint);
-    hint_spans.extend([Span::raw("  "), hint("type", "filter"), Span::raw("  "), hint("Tab", "next tab"), Span::raw("  "), hint("Esc", "close")]);
+    hint_spans.extend([Span::raw("  "), hint("type", "filter"), Span::raw("  "), hint("Tab", "next tab"), Span::raw("  "), hint("Esc", "close"), Span::raw("  "), hint("F1", "help")]);
     render_hints(frame, hints_area, hint_spans);
+
+    if app.show_help {
+        const SECTIONS: &[(&str, &[(&str, &str)])] = &[
+            ("Navigation", &[
+                ("↑  ↓",          "Move selection"),
+                ("Tab",           "Next section"),
+                ("type",          "Filter list"),
+                ("Esc",           "Close settings"),
+            ]),
+            ("Context strategy", &[
+                ("Enter",         "Confirm selection"),
+            ]),
+            ("Neurons", &[
+                ("Enter / Space", "Toggle on / off"),
+            ]),
+            ("Generation params", &[
+                ("←  →",          "Adjust value"),
+                ("r",             "Reset to default"),
+            ]),
+            ("Performance", &[
+                ("Enter / Space", "Toggle on / off"),
+            ]),
+        ];
+        draw_help_popup(frame, app, area, SECTIONS);
+    }
 }
 
 fn draw_model_select(frame: &mut Frame, app: &App) {
@@ -364,8 +389,29 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         Span::raw("  "),
         hint("Tab", "settings"),
         Span::raw("  "),
+        hint("F1", "help"),
+        Span::raw("  "),
         hint("Ctrl+C", "quit"),
     ]);
+
+    if app.show_help {
+        const SECTIONS: &[(&str, &[(&str, &str)])] = &[
+            ("Navigation", &[
+                ("↑  ↓",  "Navigate models"),
+                ("Enter", "Select and open chat"),
+            ]),
+            ("Search", &[
+                ("type",  "Filter by name"),
+                ("Esc",   "Clear search"),
+            ]),
+            ("General", &[
+                ("Tab",     "Open settings"),
+                ("F1",      "Toggle this help"),
+                ("Ctrl+C",  "Quit"),
+            ]),
+        ];
+        draw_help_popup(frame, app, area, SECTIONS);
+    }
 }
 
 fn draw_chat(frame: &mut Frame, app: &mut App) {
@@ -778,7 +824,40 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
 
     // --- help popup ---
     if app.show_help {
-        draw_help_popup(frame, app, area);
+        const SECTIONS: &[(&str, &[(&str, &str)])] = &[
+            ("Sending", &[
+                ("Enter",             "Send message"),
+                ("Ctrl+N",            "Insert newline"),
+                ("Esc",               "Stop stream / back to model select"),
+            ]),
+            ("Cursor movement", &[
+                ("←  →",              "Move one character"),
+                ("Ctrl+←  →",         "Move one word"),
+                ("Ctrl+A / Home",     "Beginning of line"),
+                ("Ctrl+E / End",      "End of line"),
+                ("↑  ↓",              "Move lines (multi-line) / browse history"),
+            ]),
+            ("Editing", &[
+                ("Backspace",         "Delete character before cursor"),
+                ("Delete",            "Delete character after cursor"),
+                ("Ctrl+W",            "Delete word before cursor"),
+                ("Ctrl+K",            "Delete to end of line"),
+                ("Ctrl+U",            "Delete to start of line"),
+            ]),
+            ("Scrolling", &[
+                ("Alt+↑  ↓",          "Scroll messages"),
+                ("PageUp / PageDown", "Scroll messages (fast)"),
+                ("Ctrl+End",          "Jump to bottom"),
+            ]),
+            ("Chat", &[
+                ("Tab",               "Enter history mode — navigate & copy blocks"),
+                ("Ctrl+Y",            "Copy selected block (history) / last response (input)"),
+                ("Ctrl+L",            "Clear conversation"),
+                ("@path",             "Attach a file or image"),
+                ("Ctrl+C",            "Quit"),
+            ]),
+        ];
+        draw_help_popup(frame, app, area, SECTIONS);
     }
 }
 
@@ -869,46 +948,10 @@ fn draw_completion_popup(frame: &mut Frame, app: &App, input_area: Rect) {
     frame.render_widget(List::new(items).block(block), popup_rect);
 }
 
-fn draw_help_popup(frame: &mut Frame, app: &App, area: Rect) {
-    const SECTIONS: &[(&str, &[(&str, &str)])] = &[
-        ("Sending", &[
-            ("Enter",        "Send message"),
-            ("Ctrl+N",       "Insert newline"),
-            ("Esc",          "Stop stream / back to model select"),
-        ]),
-        ("Cursor movement", &[
-            ("←  →",         "Move one character"),
-            ("Ctrl+←  →",    "Move one word"),
-            ("Ctrl+A",       "Beginning of line"),
-            ("Ctrl+E",       "End of line"),
-            ("Home / End",   "Beginning / end of line"),
-            ("↑  ↓",         "Move between lines (multi-line) / browse history (single-line)"),
-        ]),
-        ("Editing", &[
-            ("Backspace",    "Delete character before cursor"),
-            ("Delete",       "Delete character after cursor"),
-            ("Ctrl+W",       "Delete word before cursor"),
-            ("Ctrl+K",       "Delete to end of line"),
-            ("Ctrl+U",       "Delete to beginning of line"),
-        ]),
-        ("Scrolling", &[
-            ("Alt+↑  ↓",     "Scroll messages"),
-            ("PageUp / PageDown", "Scroll messages (fast)"),
-            ("Ctrl+End",     "Jump to bottom"),
-        ]),
-        ("Chat", &[
-            ("Tab",          "Enter history mode — navigate & copy blocks"),
-            ("Ctrl+Y",       "Copy selected block (history) / last response (input)"),
-            ("Ctrl+L",       "Clear conversation"),
-            ("@path",        "Attach a file or image"),
-            ("Ctrl+C",       "Quit"),
-            ("F1",           "Toggle this help"),
-        ]),
-    ];
-
+fn draw_help_popup(frame: &mut Frame, app: &App, area: Rect, sections: &[(&str, &[(&str, &str)])]) {
     // build lines
     let mut lines: Vec<Line> = vec![Line::raw("")];
-    for (section, entries) in SECTIONS {
+    for (section, entries) in sections {
         lines.push(Line::from(Span::styled(
             format!("  {section}"),
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
@@ -922,8 +965,9 @@ fn draw_help_popup(frame: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::raw(""));
     }
 
+    let ideal_h = (1 + sections.iter().map(|(_, e)| 2 + e.len()).sum::<usize>() + 2) as u16;
     let popup_w = 58u16.min(area.width.saturating_sub(4));
-    let popup_h = 24u16.min(area.height.saturating_sub(4));
+    let popup_h = ideal_h.min(area.height.saturating_sub(4)).max(6);
     let popup_rect = Rect {
         x: area.x + (area.width.saturating_sub(popup_w)) / 2,
         y: area.y + (area.height.saturating_sub(popup_h)) / 2,

@@ -23,6 +23,27 @@ fn snap_cursor(cursor: &mut usize, filtered: &[usize]) {
     }
 }
 
+/// Handles help popup scroll/close keys. Returns true if the key was consumed.
+fn handle_help_keys(app: &mut App, key: KeyEvent) -> bool {
+    if key.code == KeyCode::F(1) {
+        app.show_help = !app.show_help;
+        app.help_scroll = 0;
+        return true;
+    }
+    if app.show_help {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.show_help = false,
+            KeyCode::Up   | KeyCode::Char('k') => app.help_scroll = app.help_scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => app.help_scroll = app.help_scroll.saturating_add(1),
+            KeyCode::PageUp   => app.help_scroll = app.help_scroll.saturating_sub(10),
+            KeyCode::PageDown => app.help_scroll = app.help_scroll.saturating_add(10),
+            _ => {}
+        }
+        return true;
+    }
+    false
+}
+
 pub fn handle_paste(app: &mut App, text: &str) {
     if app.screen != Screen::Chat {
         return;
@@ -50,6 +71,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_config(app: &mut App, key: KeyEvent) {
+    if handle_help_keys(app, key) { return; }
     match key.code {
         KeyCode::Esc => { app.toggle_config(); return; }
         KeyCode::Tab => {
@@ -147,6 +169,7 @@ fn handle_config(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_model_select(app: &mut App, key: KeyEvent) {
+    if handle_help_keys(app, key) { return; }
     match key.code {
         KeyCode::Tab => { app.toggle_config(); return; }
         KeyCode::Esc => {
@@ -188,23 +211,7 @@ fn handle_model_select(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_chat(app: &mut App, key: KeyEvent) {
-    // F1 toggles help popup; while open only scrolling and close keys work
-    if key.code == KeyCode::F(1) {
-        app.show_help = !app.show_help;
-        app.help_scroll = 0;
-        return;
-    }
-    if app.show_help {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => app.show_help = false,
-            KeyCode::Up   | KeyCode::Char('k') => app.help_scroll = app.help_scroll.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => app.help_scroll = app.help_scroll.saturating_add(1),
-            KeyCode::PageUp   => app.help_scroll = app.help_scroll.saturating_sub(10),
-            KeyCode::PageDown => app.help_scroll = app.help_scroll.saturating_add(10),
-            _ => {}
-        }
-        return;
-    }
+    if handle_help_keys(app, key) { return; }
 
     // completion popup intercepts Esc, Tab, Up, Down
     if app.completion.is_some() {

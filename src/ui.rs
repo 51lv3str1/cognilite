@@ -1579,18 +1579,18 @@ fn parse_content_segments(content: &str) -> Vec<ContentSegment> {
 fn render_code_block(lang: &str, code: &str, width: usize) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     out.push(Line::raw(""));
-    let label = if lang.is_empty() { "code".to_string() } else { lang.to_string() };
+    let label = if lang.is_empty() { "code" } else { lang };
     out.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled(label, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(label.to_string(), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
     ]));
 
     let is_diff = lang == "diff"
         || (code.contains("\n+") && code.contains("\n-") && code.contains("@@"));
 
-    for code_line in code.trim_matches('\n').lines() {
-        let truncated: String = code_line.chars().take(width.saturating_sub(4)).collect();
-        if is_diff {
+    if is_diff {
+        for code_line in code.trim_matches('\n').lines() {
+            let truncated: String = code_line.chars().take(width.saturating_sub(4)).collect();
             let (gutter, gutter_style, text_style) =
                 if code_line.starts_with('+') && !code_line.starts_with("+++") {
                     ("  + ", Style::default().fg(USER_COLOR), Style::default().fg(USER_COLOR))
@@ -1607,13 +1607,15 @@ fn render_code_block(lang: &str, code: &str, width: usize) -> Vec<Line<'static>>
                 Span::styled(gutter, gutter_style),
                 Span::styled(truncated, text_style),
             ]));
-        } else {
-            out.push(Line::from(vec![
-                Span::styled("  ▎ ", Style::default().fg(CODE_BORDER)),
-                Span::styled(truncated, Style::default().fg(CODE_FG)),
-            ]));
+        }
+    } else {
+        for hl_line in crate::app::highlight_code(code.trim_matches('\n'), lang) {
+            let mut spans = vec![Span::styled("  ▎ ", Style::default().fg(CODE_BORDER))];
+            spans.extend(hl_line.spans);
+            out.push(Line::from(spans));
         }
     }
+
     out.push(Line::raw(""));
     out
 }

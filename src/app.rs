@@ -1877,11 +1877,71 @@ fn load_picker_entries(dir: &Path, working_dir: &Path) -> Vec<FilePickerEntry> {
     result
 }
 
-fn highlight_file(path: &Path) -> Vec<Line<'static>> {
+/// Convert syntect highlighted ranges to ratatui Spans (owned, 'static).
+fn syntax_to_spans(ranges: &[(syntect::highlighting::Style, &str)]) -> Vec<Span<'static>> {
+    ranges.iter().filter_map(|(style, text)| {
+        let t = text.trim_end_matches('\n').trim_end_matches('\r');
+        if t.is_empty() { return None; }
+        let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+        let mut s = Style::default().fg(fg);
+        if style.font_style.contains(FontStyle::BOLD)   { s = s.add_modifier(Modifier::BOLD); }
+        if style.font_style.contains(FontStyle::ITALIC) { s = s.add_modifier(Modifier::ITALIC); }
+        Some(Span::styled(t.to_string(), s))
+    }).collect()
+}
+
+/// Resolve a language tag (e.g. "rust", "python", "js") to a syntect SyntaxReference.
+fn resolve_syntax<'a>(ss: &'a SyntaxSet, lang: &str) -> &'a syntect::parsing::SyntaxReference {
+    let l = lang.trim().to_lowercase();
+    if let Some(s) = ss.find_syntax_by_extension(&l) { return s; }
+    let name = match l.as_str() {
+        "rust"                          => "Rust",
+        "python" | "py"                => "Python",
+        "javascript"                   => "JavaScript",
+        "typescript"                   => "TypeScript",
+        "bash" | "sh" | "shell" | "zsh" => "Bash",
+        "c"                            => "C",
+        "cpp" | "c++"                  => "C++",
+        "java"                         => "Java",
+        "go" | "golang"                => "Go",
+        "ruby" | "rb"                  => "Ruby",
+        "html"                         => "HTML",
+        "css"                          => "CSS",
+        "json"                         => "JSON",
+        "toml"                         => "TOML",
+        "yaml" | "yml"                 => "YAML",
+        "markdown" | "md"              => "Markdown",
+        "sql"                          => "SQL",
+        "xml"                          => "XML",
+        "lua"                          => "Lua",
+        "haskell" | "hs"               => "Haskell",
+        "swift"                        => "Swift",
+        "kotlin" | "kt"                => "Kotlin",
+        "scala"                        => "Scala",
+        "perl"                         => "Perl",
+        _                              => "",
+    };
+    if !name.is_empty() {
+        if let Some(s) = ss.find_syntax_by_name(name) { return s; }
+    }
+    ss.find_syntax_plain_text()
+}
+
+/// Highlight `code` using the given language tag. Returns one Line per source line.
+/// No line numbers — callers add their own prefix (gutter, line number, etc.).
+pub fn highlight_code(code: &str, lang: &str) -> Vec<Line<'static>> {
     let ss = SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
     let ts = THEME_SET.get_or_init(ThemeSet::load_defaults);
     let theme = &ts.themes["base16-ocean.dark"];
+    let syntax = resolve_syntax(ss, lang);
+    let mut h = HighlightLines::new(syntax, theme);
+    LinesWithEndings::from(code).take(500).map(|line| {
+        let ranges = h.highlight_line(line, ss).unwrap_or_default();
+        Line::from(syntax_to_spans(&ranges))
+    }).collect()
+}
 
+fn highlight_file(path: &Path) -> Vec<Line<'static>> {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return vec![Line::from(Span::styled(
@@ -1889,35 +1949,21 @@ fn highlight_file(path: &Path) -> Vec<Line<'static>> {
             Style::default().fg(Color::DarkGray),
         ))],
     };
-
-    let syntax = ss.find_syntax_for_file(path)
-        .ok().flatten()
+    let ss = SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+    let ts = THEME_SET.get_or_init(ThemeSet::load_defaults);
+    let theme = &ts.themes["base16-ocean.dark"];
+    let syntax = ss.find_syntax_for_file(path).ok().flatten()
         .unwrap_or_else(|| ss.find_syntax_plain_text());
-
     let mut h = HighlightLines::new(syntax, theme);
-    let mut result = Vec::new();
-
-    for (i, line) in LinesWithEndings::from(&content).enumerate().take(500) {
-        let ranges = match h.highlight_line(line, ss) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+    LinesWithEndings::from(&content).enumerate().take(500).map(|(i, line)| {
+        let ranges = h.highlight_line(line, ss).unwrap_or_default();
         let mut spans = vec![Span::styled(
             format!("{:4} ", i + 1),
             Style::default().fg(Color::Rgb(88, 91, 112)),
         )];
-        for (style, text) in &ranges {
-            let text = text.trim_end_matches('\n').trim_end_matches('\r');
-            if text.is_empty() { continue; }
-            let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
-            let mut s = Style::default().fg(fg);
-            if style.font_style.contains(FontStyle::BOLD)   { s = s.add_modifier(Modifier::BOLD); }
-            if style.font_style.contains(FontStyle::ITALIC) { s = s.add_modifier(Modifier::ITALIC); }
-            spans.push(Span::styled(text.to_string(), s));
-        }
-        result.push(Line::from(spans));
-    }
-    result
+        spans.extend(syntax_to_spans(&ranges));
+        Line::from(spans)
+    }).collect()
 }
 
 // ── template loading ──────────────────────────────────────────────────────────

@@ -10,6 +10,8 @@ Neurons are loaded from:
 
 Each neuron directory contains `neuron.toml` (name, description), `thoughts/*.md` (injected into the system prompt), and optional `synapses/*.toml` (tool definitions).
 
+Neurons are independent — they don't communicate or call each other. Each neuron is markdown text concatenated into this system prompt. There is no runtime interaction between them.
+
 ## Tool execution
 
 When you output `<tool>command</tool>`, cognilite runs it via `sh -c` in the working directory, strips the tag from the display, and injects the result as a Tool message. The stream then restarts with the full conversation so you can continue. Tags inside `<think>` blocks are ignored.

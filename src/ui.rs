@@ -188,7 +188,32 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 Rect { x: inner.x, y: items_y, width: inner.width, height: 1 },
             );
 
-            let content_y = items_y + 2;
+            // Token summary line
+            {
+                let enabled = app.effective_enabled_neurons();
+                let summary = if app.neuron_sub_section == 1 {
+                    // Smart: split reasoning vs tooling
+                    let r_tok: u64 = enabled.iter().filter(|n| !neuron_is_tooling(n)).map(|n| (n.system_prompt.len() / 4) as u64).sum();
+                    let t_tok: u64 = enabled.iter().filter(|n| neuron_is_tooling(n)).map(|n| (n.system_prompt.len() / 4) as u64).sum();
+                    let t_count = enabled.iter().filter(|n| neuron_is_tooling(n)).count();
+                    if t_count > 0 {
+                        format!("~{r_tok}tok active  +  ~{t_tok}tok on-demand ({t_count} tooling)")
+                    } else {
+                        format!("~{r_tok}tok active")
+                    }
+                } else {
+                    let total: u64 = enabled.iter().map(|n| (n.system_prompt.len() / 4) as u64).sum();
+                    let count = enabled.len();
+                    format!("~{total}tok  ·  {count} neurons")
+                };
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(summary, Style::default().fg(THINKING_COLOR))))
+                        .alignment(ratatui::layout::Alignment::Center),
+                    Rect { x: inner.x, y: items_y + 1, width: inner.width, height: 1 },
+                );
+            }
+
+            let content_y = items_y + 3;
 
             match app.neuron_sub_section {
                 0 => {

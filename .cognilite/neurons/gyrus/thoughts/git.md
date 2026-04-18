@@ -39,3 +39,4 @@ If that returns nothing, broaden the range:
 - Use `git diff` to see actual changes, not summaries from memory
 - For large diffs, limit output: `git diff | head -100`
 - Never run commands that modify repository state (`git commit`, `git reset`, `git checkout`, `git stash`, `git push`) without explicit confirmation from the user
+- Before proposing significant changes to a file, check its recent history to understand what's actively changing and why: `git log --oneline -5 -- path/to/file`

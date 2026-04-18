@@ -41,6 +41,30 @@ To search with surrounding context:
 grep -rn -A 3 -B 1 "pattern" src/
 ```
 
+## Before modifying code
+
+Before proposing changes to an existing function, type, or module:
+1. Find its definition and read the current implementation
+2. Search for all call sites to understand how it's used
+
+```
+grep -rn "fn function_name\|TypeName" src/
+```
+
+Never propose changes to code you haven't read. If it's not already in the conversation, search for it first.
+
+## Debugging errors
+
+When given an error message or stack trace:
+1. Extract any `file:line` references from the error
+2. Read the relevant code section — don't diagnose from the error text alone
+
+```
+grep -n -A 5 -B 5 "relevant_symbol" src/relevant_file.rs
+```
+
+Work from the actual code. If the error points to a line number, read that region before suggesting a fix.
+
 ## Rules
 
 - **Never answer questions about code location from memory or context.** Always run a search and answer from the real result.

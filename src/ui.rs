@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
-use crate::app::{App, AskKind, ChatFocus, CompletionKind, CtxStrategy, Role, Screen, StreamState};
+use crate::app::{App, AskKind, ChatFocus, CompletionKind, FilePickerEntry, CtxStrategy, Role, Screen, StreamState};
 
 const ACCENT: Color = Color::Rgb(137, 180, 250);  // blue
 const USER_COLOR: Color = Color::Rgb(166, 227, 161); // green
@@ -968,14 +968,15 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
 
 fn draw_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     let fp = match &app.file_picker { Some(f) => f, None => return };
-    let candidates = app.file_picker_candidates();
+    let entries = app.file_picker_visible();
 
-    const MAX_VISIBLE: usize = 12;
-    let total = candidates.len();
+    const MAX_VISIBLE: usize = 14;
+    let total   = entries.len();
     let visible = total.min(MAX_VISIBLE);
 
-    let popup_width  = (area.width * 2 / 3).max(40).min(area.width);
-    let popup_height = (visible as u16 + 5).min(area.height); // +5: border(2) + search(1) + sep(1) + hint(1)
+    let popup_width  = (area.width * 2 / 3).max(44).min(area.width);
+    // header(1) + path(1) + filter(1) + list + border(2)
+    let popup_height = (visible as u16 + 5).min(area.height);
     let popup_x = area.x + (area.width.saturating_sub(popup_width)) / 2;
     let popup_y = area.y + (area.height.saturating_sub(popup_height)) / 2;
     let popup_rect = Rect { x: popup_x, y: popup_y, width: popup_width, height: popup_height };
@@ -984,7 +985,10 @@ fn draw_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(
         Block::default()
             .title(Span::styled(" 📎 pin files ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
-            .title_bottom(Span::styled(" Enter pin/unpin · Esc close ", Style::default().fg(DIM)))
+            .title_bottom(Span::styled(
+                " ↑↓ navigate · Enter/→ open/pin · ←/Bksp up · Esc close ",
+                Style::default().fg(DIM),
+            ))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(ACCENT))
@@ -992,64 +996,98 @@ fn draw_file_picker(frame: &mut Frame, app: &App, area: Rect) {
         popup_rect,
     );
 
-    // search box
-    let search_area = Rect { x: popup_rect.x + 1, y: popup_rect.y + 1, width: popup_rect.width - 2, height: 1 };
-    let search_text = if fp.query.is_empty() {
+    // current path
+    let rel_dir = fp.current_dir.strip_prefix(&app.working_dir)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let path_label = if rel_dir.is_empty() { "./".to_string() } else { format!("{rel_dir}/") };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  📁 ", Style::default().fg(ACCENT)),
+            Span::styled(path_label, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        ])),
+        Rect { x: popup_rect.x + 1, y: popup_rect.y + 1, width: popup_rect.width - 2, height: 1 },
+    );
+
+    // filter input
+    let filter_line = if fp.query.is_empty() {
         Line::from(vec![
-            Span::styled("/ ", Style::default().fg(ACCENT)),
-            Span::styled("type to filter...", Style::default().fg(THINKING_COLOR)),
+            Span::styled("  / ", Style::default().fg(DIM)),
+            Span::styled("filter...", Style::default().fg(THINKING_COLOR)),
         ])
     } else {
         Line::from(vec![
-            Span::styled("/ ", Style::default().fg(ACCENT)),
+            Span::styled("  / ", Style::default().fg(ACCENT)),
             Span::styled(fp.query.clone(), Style::default().fg(Color::White)),
         ])
     };
-    frame.render_widget(Paragraph::new(search_text), search_area);
+    frame.render_widget(
+        Paragraph::new(filter_line),
+        Rect { x: popup_rect.x + 1, y: popup_rect.y + 2, width: popup_rect.width - 2, height: 1 },
+    );
 
-    // file list
-    let scroll = if fp.cursor >= MAX_VISIBLE { fp.cursor + 1 - MAX_VISIBLE } else { 0 };
-    let list_area = Rect {
-        x: popup_rect.x + 1,
-        y: popup_rect.y + 2,
-        width: popup_rect.width - 2,
-        height: popup_rect.height.saturating_sub(4),
-    };
+    // entry list
+    let list_y    = popup_rect.y + 3;
+    let list_h    = popup_rect.height.saturating_sub(4);
+    let scroll    = if fp.cursor >= MAX_VISIBLE { fp.cursor + 1 - MAX_VISIBLE } else { 0 };
 
-    for (i, name) in candidates[scroll..scroll + visible].iter().enumerate() {
+    for (i, entry) in entries[scroll..scroll + visible].iter().enumerate() {
         let global_idx = scroll + i;
         let selected   = global_idx == fp.cursor;
-        let pinned     = app.pinned_files.iter().any(|pf| &pf.display == name);
-        let short      = name.split('/').last().unwrap_or(name);
-        let dir_part   = if name.contains('/') { &name[..name.rfind('/').unwrap()] } else { "" };
+        let row = Rect { x: popup_rect.x + 1, y: list_y + i as u16, width: popup_rect.width - 2, height: 1 };
+        if i as u16 >= list_h { break; }
 
-        let row = Rect { x: list_area.x, y: list_area.y + i as u16, width: list_area.width, height: 1 };
-        let line = if selected {
-            Line::from(vec![
-                Span::styled(if pinned { " ● " } else { " ○ " }, Style::default().fg(BG).bg(ACCENT)),
-                Span::styled(format!("{short} "), Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)),
-                Span::styled(dir_part.to_string(), Style::default().fg(BG).bg(ACCENT)),
-            ])
-        } else if pinned {
-            Line::from(vec![
-                Span::styled(" ● ", Style::default().fg(USER_COLOR)),
-                Span::styled(short.to_string(), Style::default().fg(Color::White)),
-                Span::styled(format!("  {dir_part}"), Style::default().fg(THINKING_COLOR)),
-            ])
-        } else {
-            Line::from(vec![
-                Span::styled(" ○ ", Style::default().fg(DIM)),
-                Span::styled(short.to_string(), Style::default().fg(Color::White)),
-                Span::styled(format!("  {dir_part}"), Style::default().fg(THINKING_COLOR)),
-            ])
+        let line = match entry {
+            FilePickerEntry::Parent => {
+                if selected {
+                    Line::from(Span::styled("  ↑ ../", Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)))
+                } else {
+                    Line::from(Span::styled("  ↑ ../", Style::default().fg(DIM)))
+                }
+            }
+            FilePickerEntry::Dir(name) => {
+                if selected {
+                    Line::from(vec![
+                        Span::styled("  📁 ", Style::default().fg(BG).bg(ACCENT)),
+                        Span::styled(format!("{name}/"), Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)),
+                    ])
+                } else {
+                    Line::from(vec![
+                        Span::styled("  📁 ", Style::default().fg(ACCENT)),
+                        Span::styled(format!("{name}/"), Style::default().fg(Color::White)),
+                    ])
+                }
+            }
+            FilePickerEntry::File(display) => {
+                let pinned = app.pinned_files.iter().any(|pf| &pf.display == display);
+                let name   = display.split('/').last().unwrap_or(display);
+                let pin_mark = if pinned { " ●" } else { "" };
+                if selected {
+                    Line::from(vec![
+                        Span::styled(if pinned { "  ● " } else { "  ○ " }, Style::default().fg(BG).bg(ACCENT)),
+                        Span::styled(name.to_string(), Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)),
+                    ])
+                } else if pinned {
+                    Line::from(vec![
+                        Span::styled("  ● ", Style::default().fg(USER_COLOR)),
+                        Span::styled(name.to_string(), Style::default().fg(Color::White)),
+                        Span::styled(pin_mark.to_string(), Style::default().fg(USER_COLOR)),
+                    ])
+                } else {
+                    Line::from(vec![
+                        Span::styled("  ○ ", Style::default().fg(DIM)),
+                        Span::styled(name.to_string(), Style::default().fg(Color::White)),
+                    ])
+                }
+            }
         };
         frame.render_widget(Paragraph::new(line), row);
     }
 
     if total == 0 {
         frame.render_widget(
-            Paragraph::new(Span::styled("  no files found", Style::default().fg(DIM))),
-            Rect { x: list_area.x, y: list_area.y, width: list_area.width, height: 1 },
+            Paragraph::new(Span::styled("  no files here", Style::default().fg(DIM))),
+            Rect { x: popup_rect.x + 1, y: list_y, width: popup_rect.width - 2, height: 1 },
         );
     }
 }

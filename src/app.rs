@@ -128,9 +128,18 @@ pub struct PinnedFile {
     pub changed: bool,            // mtime differs from snapshot
 }
 
+#[derive(Clone)]
+pub enum FilePickerEntry {
+    Parent,
+    Dir(String),
+    File(String), // relative path from working_dir
+}
+
 pub struct FilePicker {
-    pub query: String,
+    pub current_dir: PathBuf,
+    pub entries: Vec<FilePickerEntry>,
     pub cursor: usize,
+    pub query: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -976,20 +985,77 @@ impl App {
     }
 
     pub fn open_file_picker(&mut self) {
-        self.file_picker = Some(FilePicker { query: String::new(), cursor: 0 });
+        let dir = self.working_dir.clone();
+        let entries = load_picker_entries(&dir, &dir);
+        self.file_picker = Some(FilePicker { current_dir: dir, entries, cursor: 0, query: String::new() });
     }
 
     pub fn close_file_picker(&mut self) {
         self.file_picker = None;
     }
 
+    /// Returns the visible entries after applying the query filter.
+    pub fn file_picker_visible(&self) -> Vec<FilePickerEntry> {
+        let Some(fp) = &self.file_picker else { return vec![] };
+        if fp.query.is_empty() {
+            fp.entries.clone()
+        } else {
+            let q = fp.query.to_lowercase();
+            fp.entries.iter().filter(|e| match e {
+                FilePickerEntry::Parent     => false,
+                FilePickerEntry::Dir(n)    => n.to_lowercase().contains(&q),
+                FilePickerEntry::File(f)   => f.to_lowercase().contains(&q),
+            }).cloned().collect()
+        }
+    }
+
     pub fn file_picker_accept(&mut self) {
-        let candidates = self.file_picker_candidates();
-        if let Some(selected) = self.file_picker.as_ref().and_then(|fp| candidates.get(fp.cursor)).cloned() {
-            if self.pinned_files.iter().any(|pf| pf.display == selected) {
-                self.unpin_file(&selected.clone());
-            } else {
-                self.pin_file(selected);
+        let visible = self.file_picker_visible();
+        let cursor  = self.file_picker.as_ref().map(|fp| fp.cursor).unwrap_or(0);
+        let Some(entry) = visible.into_iter().nth(cursor) else { return };
+        match entry {
+            FilePickerEntry::Parent => self.file_picker_go_up(),
+            FilePickerEntry::Dir(name) => {
+                let new_dir    = self.file_picker.as_ref().unwrap().current_dir.join(&name);
+                let working_dir = self.working_dir.clone();
+                if new_dir.is_dir() {
+                    let entries = load_picker_entries(&new_dir, &working_dir);
+                    if let Some(fp) = &mut self.file_picker {
+                        fp.current_dir = new_dir;
+                        fp.entries     = entries;
+                        fp.cursor      = 0;
+                        fp.query.clear();
+                    }
+                }
+            }
+            FilePickerEntry::File(display) => {
+                if self.pinned_files.iter().any(|pf| pf.display == display) {
+                    let d = display.clone();
+                    self.unpin_file(&d);
+                } else {
+                    self.pin_file(display);
+                }
+            }
+        }
+    }
+
+    pub fn file_picker_go_up(&mut self) {
+        let Some(fp) = &mut self.file_picker else { return };
+        if !fp.query.is_empty() {
+            fp.query.clear();
+            fp.cursor = 0;
+            return;
+        }
+        let parent = fp.current_dir.parent().map(|p| p.to_path_buf());
+        let working_dir = self.working_dir.clone();
+        if let Some(parent) = parent {
+            if parent.starts_with(&working_dir) {
+                let entries = load_picker_entries(&parent, &working_dir);
+                if let Some(fp) = &mut self.file_picker {
+                    fp.current_dir = parent;
+                    fp.entries     = entries;
+                    fp.cursor      = 0;
+                }
             }
         }
     }
@@ -1001,21 +1067,10 @@ impl App {
     }
 
     pub fn file_picker_next(&mut self) {
-        let len = self.file_picker_candidates().len();
+        let len = self.file_picker_visible().len();
         if let Some(fp) = &mut self.file_picker {
             if fp.cursor + 1 < len { fp.cursor += 1; }
         }
-    }
-
-    pub fn file_picker_candidates(&self) -> Vec<String> {
-        let query = self.file_picker.as_ref().map(|fp| fp.query.to_lowercase()).unwrap_or_default();
-        let mut results = Vec::new();
-        collect_picker_files(&self.working_dir, &self.working_dir, 0, &mut results);
-        if !query.is_empty() {
-            results.retain(|f: &String| f.to_lowercase().contains(&query));
-        }
-        results.sort();
-        results
     }
 
     // --- synapse execution ---
@@ -1565,28 +1620,35 @@ fn file_diff(old: &str, new: &str, label: &str) -> String {
     }
 }
 
-/// Recursively collect text files relative to `base`, depth-limited.
-fn collect_picker_files(base: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
-    if depth > 4 { return; }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    let mut entries: Vec<_> = entries.flatten().collect();
-    entries.sort_by_key(|e| e.file_name());
-    for entry in entries {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') || name_str == "target" || name_str == "node_modules" { continue; }
-        if path.is_dir() {
-            collect_picker_files(base, &path, depth + 1, out);
-        } else {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-            if TEXT_EXTS.contains(&ext.as_str()) || ext.is_empty() {
-                if let Ok(rel) = path.strip_prefix(base) {
-                    out.push(rel.to_string_lossy().to_string());
+/// Returns the entries for a single directory level: optionally a Parent entry,
+/// then subdirectories, then text files — all sorted alphabetically.
+fn load_picker_entries(dir: &Path, working_dir: &Path) -> Vec<FilePickerEntry> {
+    let mut dirs  = Vec::new();
+    let mut files = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "target" || name == "node_modules" { continue; }
+            if path.is_dir() {
+                dirs.push(FilePickerEntry::Dir(name));
+            } else {
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                if TEXT_EXTS.contains(&ext.as_str()) || ext.is_empty() {
+                    if let Ok(rel) = path.strip_prefix(working_dir) {
+                        files.push(FilePickerEntry::File(rel.to_string_lossy().to_string()));
+                    }
                 }
             }
         }
     }
+    let mut result = Vec::new();
+    if dir != working_dir { result.push(FilePickerEntry::Parent); }
+    result.extend(dirs);
+    result.extend(files);
+    result
 }
 
 // ── template loading ──────────────────────────────────────────────────────────

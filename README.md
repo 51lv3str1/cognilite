@@ -75,6 +75,60 @@ cargo build --release
 ./target/release/cognilite
 ```
 
+## Headless mode
+
+Run without the TUI — pipe input, script responses, or test the full tool/neuron loop from the shell.
+
+```bash
+# basic
+cognilite --headless "show me the last 5 git commits"
+
+# read message from stdin
+echo "what files changed recently?" | cognilite --headless
+
+# specify model
+cognilite --headless --model qwen2.5:7b "explain this project"
+
+# pin a file into context
+cognilite --headless --pin src/app.rs "summarize the App struct"
+
+# attach a file to the message
+cognilite --headless --attach src/main.rs "what does this do?"
+
+# use a neuron preset
+cognilite --headless --preset MyPreset "refactor this"
+
+# raw mode (no neurons)
+cognilite --headless --neuron-mode presets --preset __pure__ "hello"
+
+# override generation params
+cognilite --headless --temperature 0.2 --top-p 0.9 "write a haiku"
+
+# auto-confirm all <ask type="confirm"> prompts
+cognilite --headless --yes "clean up the tmp files"
+```
+
+**Output:** response tokens stream to stdout; status messages (model, tool calls, neuron loads, stats) go to stderr. Exit code 0 on success, 1 on error.
+
+All tags are handled the same as in the TUI: `<tool>` executes commands and restarts the stream, `<load_neuron>` injects on-demand neurons, `<patch>` is applied automatically, `<ask>` reads from stdin (or auto-confirms with `--yes`).
+
+### Headless flags
+
+| Flag | Description |
+|------|-------------|
+| `--model <name>` | Model to use (default: first available) |
+| `--neuron-mode <manual\|smart\|presets>` | Override neuron mode |
+| `--preset <name>` | Activate a preset (implies presets mode) |
+| `--no-neuron <name>` | Disable a neuron (repeatable; manual mode) |
+| `--temperature <f>` | Override temperature |
+| `--top-p <f>` | Override top_p |
+| `--repeat-penalty <f>` | Override repeat_penalty |
+| `--ctx-strategy <dynamic\|full>` | Context window strategy |
+| `--keep-alive` | Keep model loaded after response |
+| `--pin <path>` | Pin file into system prompt (repeatable) |
+| `--attach <path>` | Attach file to the message (repeatable) |
+| `--yes` / `-y` | Auto-confirm all `<ask type="confirm">` prompts |
+
 ## Keybindings
 
 ### Model select screen
@@ -411,9 +465,10 @@ Use `←` / `→` to adjust, `r` to reset.
 
 ```
 src/
-├── main.rs        — entry point, event loop, model loading
+├── main.rs        — entry point, event loop, model loading, CLI arg parsing
 ├── app.rs         — App state, message types, input editing, tag interception, tool/patch/ask/mood loop,
 │                    file picker/panel/pinned logic, highlight_code/highlight_file (syntect)
+├── headless.rs    — headless mode: CLI arg struct, stream loop, stdin ask handler
 ├── synapse.rs     — Neuron/Synapse types, directory loader, tool context builder, .toml parser
 ├── events.rs      — key event dispatch (config / model select / chat / history / ask / picker modes)
 ├── ollama.rs      — Ollama API: list_models, fetch_context_length, stream_chat, warmup
@@ -432,6 +487,7 @@ src/
 struct App {
     screen: Screen,                 // Config | ModelSelect | Chat
     ctx_strategy: CtxStrategy,     // Dynamic | Full
+    neuron_mode: NeuronMode,        // Manual | Smart | Presets
     messages: Vec<Message>,
     input: String,
     cursor_pos: usize,
@@ -444,8 +500,8 @@ struct App {
     working_dir: PathBuf,
     completion: Option<Completion>, // @path or /template popup
     neurons: Vec<Neuron>,
+    injected_neurons: HashSet<String>, // on-demand neurons loaded in this conversation
     templates: Vec<(String, String)>,
-    tool_context: String,
     chat_focus: ChatFocus,          // Input | History | FilePanel
     history_cursor: usize,
     ask: Option<InputRequest>,
@@ -469,6 +525,7 @@ Each streaming chunk is accumulated into the last assistant message. After every
 | Tag | Action |
 |-----|--------|
 | `<tool>cmd</tool>` | Strip from display, run command, inject Tool result, restart stream |
+| `<load_neuron>Name</load_neuron>` | Strip from display, inject neuron content as Tool message, restart stream |
 | `<ask>...</ask>` | Strip from display, set `ask` state, stop stream, wait for user input |
 | `<patch>diff</patch>` | Replace with rendered `diff` block, set `pending_patch`, show confirm, stop stream |
 | `<mood>emoji</mood>` | Strip from display, update `current_mood`, **continue streaming** |

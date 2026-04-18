@@ -847,9 +847,13 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             let elapsed = started.elapsed().as_secs_f64();
             const SPINNER: &[&str] = &["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
             let frame_i = (elapsed / 0.1) as usize % SPINNER.len();
+            let tok_hint = app.warmup_prompt_tokens
+                .map(|t| format!("  ~{t} tok"))
+                .unwrap_or_default();
             frame.render_widget(Paragraph::new(Line::from(vec![
                 Span::styled(format!("  {} ", SPINNER[frame_i]), Style::default().fg(ACCENT)),
                 Span::styled("warming up KV cache", Style::default().fg(DIM)),
+                Span::styled(tok_hint, Style::default().fg(THINKING_COLOR)),
                 Span::styled(format!("  {}", format_duration(elapsed)), Style::default().fg(THINKING_COLOR)),
             ])), warmup_area);
         }

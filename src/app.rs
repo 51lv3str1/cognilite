@@ -270,6 +270,7 @@ pub struct App {
     pub stream_rx: Option<mpsc::Receiver<StreamChunk>>,
     pub warmup_rx: Option<mpsc::Receiver<()>>,
     pub warmup_started_at: Option<std::time::Instant>,
+    pub warmup_prompt_tokens: Option<u64>, // estimated tokens in the system prompt being pre-filled
     pub stream_started_at: Option<std::time::Instant>,
     pub thinking_end_secs: Option<f64>, // captured when first content token arrives
     pub completion: Option<Completion>,
@@ -346,6 +347,7 @@ impl App {
             stream_rx: None,
             warmup_rx: None,
             warmup_started_at: None,
+            warmup_prompt_tokens: None,
             stream_started_at: None,
             thinking_end_secs: None,
             completion: None,
@@ -979,6 +981,7 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.warmup_rx = Some(rx);
         self.warmup_started_at = Some(std::time::Instant::now());
+        self.warmup_prompt_tokens = Some((system.len() / 4) as u64);
         std::thread::spawn(move || {
             crate::ollama::warmup(&base_url, model, system, num_ctx, keep_alive);
             let _ = tx.send(());

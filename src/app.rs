@@ -170,9 +170,19 @@ pub enum AttachmentKind {
 
 #[derive(Debug, Clone)]
 pub struct Attachment {
-    pub filename: String,
+    pub filename: String,   // basename, for display
+    pub path: PathBuf,      // resolved absolute path, for reopening
     pub kind: AttachmentKind,
     pub size: usize,
+}
+
+pub struct FilePanel {
+    pub path: PathBuf,
+    pub display_path: String,
+    pub lines: Vec<Line<'static>>,
+    pub scroll: usize,
+    pub mtime: Option<std::time::SystemTime>,
+    pub reloaded_at: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -290,6 +300,9 @@ pub struct App {
     // pinned files (always in system prompt)
     pub pinned_files: Vec<PinnedFile>,
     pub file_picker: Option<FilePicker>,
+    // file panel (right-side code viewer)
+    pub file_panel: Option<FilePanel>,
+    pub file_panel_attachment: Option<(usize, usize)>, // (msg_idx, att_idx)
 }
 
 impl App {
@@ -375,6 +388,8 @@ impl App {
             pending_patch: None,
             pinned_files: Vec::new(),
             file_picker: None,
+            file_panel: None,
+            file_panel_attachment: None,
         }
     }
 
@@ -1009,6 +1024,78 @@ impl App {
         self.file_picker = None;
     }
 
+    // --- file panel (right-side viewer) ---
+
+    pub fn open_file_panel(&mut self, path: PathBuf) {
+        let display_path = path.strip_prefix(&self.working_dir)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string_lossy().to_string());
+        let mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+        let lines = highlight_file(&path);
+        self.file_panel = Some(FilePanel { path, display_path, lines, scroll: 0, mtime, reloaded_at: None });
+    }
+
+    pub fn close_file_panel(&mut self) {
+        self.file_panel = None;
+        self.file_panel_attachment = None;
+    }
+
+    pub fn check_file_panel(&mut self) {
+        let Some(fp) = &self.file_panel else { return };
+        let path = fp.path.clone();
+        let old_mtime = fp.mtime;
+        let new_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+        if new_mtime.is_some() && new_mtime != old_mtime {
+            let lines = highlight_file(&path);
+            if let Some(fp) = &mut self.file_panel {
+                fp.lines = lines;
+                fp.mtime = new_mtime;
+                fp.reloaded_at = Some(std::time::Instant::now());
+            }
+        }
+    }
+
+    pub fn file_panel_scroll_up(&mut self) {
+        if let Some(fp) = &mut self.file_panel {
+            fp.scroll = fp.scroll.saturating_sub(10);
+        }
+    }
+
+    pub fn file_panel_scroll_down(&mut self) {
+        if let Some(fp) = &mut self.file_panel {
+            let max = fp.lines.len().saturating_sub(1);
+            fp.scroll = (fp.scroll + 10).min(max);
+        }
+    }
+
+    /// Open/cycle through text attachments of the currently selected history message.
+    pub fn cycle_message_attachment(&mut self) {
+        let msg_idx = self.history_cursor;
+        let Some(msg) = self.messages.get(msg_idx) else { return };
+        if msg.role != Role::User { return; }
+
+        let text_att_indices: Vec<usize> = msg.attachments.iter().enumerate()
+            .filter(|(_, a)| a.kind == AttachmentKind::Text)
+            .map(|(i, _)| i)
+            .collect();
+        if text_att_indices.is_empty() { return; }
+
+        let next_att_idx = if let Some((cur_msg, cur_att)) = self.file_panel_attachment {
+            if cur_msg == msg_idx {
+                let pos = text_att_indices.iter().position(|&i| i == cur_att).unwrap_or(0);
+                text_att_indices[(pos + 1) % text_att_indices.len()]
+            } else {
+                text_att_indices[0]
+            }
+        } else {
+            text_att_indices[0]
+        };
+
+        let path = msg.attachments[next_att_idx].path.clone();
+        self.file_panel_attachment = Some((msg_idx, next_att_idx));
+        self.open_file_panel(path);
+    }
+
     /// Returns the visible entries after applying the query filter.
     pub fn file_picker_visible(&self) -> Vec<FilePickerEntry> {
         let Some(fp) = &self.file_picker else { return vec![] };
@@ -1177,6 +1264,7 @@ impl App {
             images: vec![],
             attachments: vec![Attachment {
                 filename,
+                path: PathBuf::new(), // tool outputs don't correspond to a real file path
                 kind: AttachmentKind::Text,
                 size,
             }],
@@ -1869,6 +1957,7 @@ pub fn resolve_attachments(
                             images.push(b64);
                             attachments.push(Attachment {
                                 filename: filename.clone(),
+                                path: path.clone(),
                                 kind: AttachmentKind::Image,
                                 size,
                             });
@@ -1887,6 +1976,7 @@ pub fn resolve_attachments(
                             ));
                             attachments.push(Attachment {
                                 filename: filename.clone(),
+                                path: path.clone(),
                                 kind: AttachmentKind::Text,
                                 size,
                             });

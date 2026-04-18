@@ -415,8 +415,19 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
 }
 
 fn draw_chat(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
-    frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
+    let full_area = frame.area();
+    frame.render_widget(Block::default().style(Style::default().bg(BG)), full_area);
+
+    // Split horizontally when file panel is open
+    let (area, panel_area_opt) = if app.file_panel.is_some() {
+        let [left, right] = Layout::horizontal([
+            Constraint::Percentage(60),
+            Constraint::Percentage(40),
+        ]).areas(full_area);
+        (left, Some(right))
+    } else {
+        (full_area, None)
+    };
 
     // +2 for borders; account for visual wrapping (area.width - 4 = borders(2) + prefix(2))
     let input_inner_width = area.width.saturating_sub(4);
@@ -554,22 +565,40 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                         )));
                     }
                 }
-                // attachment pills
-                for att in &msg.attachments {
+                // attachment chips
+                for (att_idx, att) in msg.attachments.iter().enumerate() {
                     let icon = match att.kind {
                         crate::app::AttachmentKind::Text => "≡",
                         crate::app::AttachmentKind::Image => "⬡",
                     };
                     let size_str = if att.size >= 1024 {
-                        format!("{:.1} KB", att.size as f64 / 1024.0)
+                        format!("{:.1}KB", att.size as f64 / 1024.0)
                     } else {
-                        format!("{} B", att.size)
+                        format!("{}B", att.size)
                     };
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("  {icon} "), Style::default().fg(ACCENT)),
-                        Span::styled(att.filename.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("  {size_str}"), Style::default().fg(DIM)),
-                    ]));
+                    let is_open = app.file_panel.as_ref()
+                        .map(|fp| fp.path == att.path)
+                        .unwrap_or(false);
+                    let is_this_msg_selected = is_selected;
+                    let _ = (att_idx, is_this_msg_selected);
+                    if is_open {
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("  {icon} "), Style::default().fg(BG).bg(ACCENT)),
+                            Span::styled(att.filename.clone(), Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)),
+                            Span::styled(format!(" {size_str} "), Style::default().fg(BG).bg(ACCENT)),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("  {icon} "), Style::default().fg(ACCENT)),
+                            Span::styled(att.filename.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                            Span::styled(format!("  {size_str}"), Style::default().fg(DIM)),
+                            if is_selected && att.kind == crate::app::AttachmentKind::Text {
+                                Span::styled("  Enter to view", Style::default().fg(DIM))
+                            } else {
+                                Span::raw("")
+                            },
+                        ]));
+                    }
                 }
             }
             Role::Tool => {
@@ -893,6 +922,11 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         draw_file_picker(frame, app, msg_area);
     }
 
+    // --- file panel (right side) ---
+    if let Some(p_area) = panel_area_opt {
+        draw_file_panel(frame, app, p_area);
+    }
+
     // --- hints ---
     let hints_line = if let Some(ref ask) = app.ask {
         match &ask.kind {
@@ -901,13 +935,29 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             AskKind::Choice(_) => Line::from(vec![hint("↑/↓", "navigate"), Span::raw("  "), hint("Enter", "select"), Span::raw("  "), hint("Esc", "cancel")]),
         }
     } else if history_mode {
-        Line::from(vec![
-            hint("↑/↓", "navigate"),
-            Span::raw("  "),
-            hint("Ctrl+Y", "copy block"),
-            Span::raw("  "),
-            hint("Tab/Esc", "back to input"),
-        ])
+        if app.file_panel.is_some() {
+            Line::from(vec![
+                hint("↑/↓", "navigate"),
+                Span::raw("  "),
+                hint("Enter", "cycle file"),
+                Span::raw("  "),
+                hint("PgUp/Dn", "scroll preview"),
+                Span::raw("  "),
+                hint("q", "close preview"),
+                Span::raw("  "),
+                hint("Tab/Esc", "back to input"),
+            ])
+        } else {
+            Line::from(vec![
+                hint("↑/↓", "navigate"),
+                Span::raw("  "),
+                hint("Enter", "open file"),
+                Span::raw("  "),
+                hint("Ctrl+Y", "copy block"),
+                Span::raw("  "),
+                hint("Tab/Esc", "back to input"),
+            ])
+        }
     } else {
         let esc_label = if app.stream_state == StreamState::Streaming { "stop" } else { "models" };
         Line::from(vec![
@@ -949,11 +999,13 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             ]),
             ("Scrolling", &[
                 ("Alt+↑  ↓",          "Scroll messages"),
-                ("PageUp / PageDown", "Scroll messages (fast)"),
                 ("Ctrl+End",          "Jump to bottom"),
             ]),
             ("Chat", &[
                 ("Tab",               "Enter history mode — navigate & copy blocks"),
+                ("Enter (history)",   "Open/cycle file attachments in side panel"),
+                ("PgUp/PgDn",         "Scroll file panel"),
+                ("q (history)",       "Close file panel"),
                 ("Ctrl+Y",            "Copy selected block (history) / last response (input)"),
                 ("Ctrl+L",            "Clear conversation"),
                 ("@path",             "Attach a file or image"),
@@ -964,6 +1016,37 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         ];
         draw_help_popup(frame, app, area, SECTIONS);
     }
+}
+
+fn draw_file_panel(frame: &mut Frame, app: &App, area: Rect) {
+    let fp = match &app.file_panel { Some(f) => f, None => return };
+
+    let show_reloaded = fp.reloaded_at
+        .map(|t| t.elapsed() < std::time::Duration::from_secs(2))
+        .unwrap_or(false);
+
+    let mut title_spans = vec![
+        Span::styled(format!(" {} ", fp.display_path), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+    ];
+    if show_reloaded {
+        title_spans.push(Span::styled("↺ ", Style::default().fg(USER_COLOR)));
+    }
+
+    let block = Block::default()
+        .title(Line::from(title_spans))
+        .title_bottom(Span::styled(" PgUp/PgDn scroll  q close ", Style::default().fg(DIM)))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(DIM))
+        .style(Style::default().bg(BG));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let start = fp.scroll.min(fp.lines.len());
+    let visible = inner.height as usize;
+    let lines: Vec<Line> = fp.lines[start..].iter().take(visible).cloned().collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_file_picker(frame: &mut Frame, app: &App, area: Rect) {

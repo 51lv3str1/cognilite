@@ -299,6 +299,15 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
     let ctrl  = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt   = key.modifiers.contains(KeyModifiers::ALT);
 
+    // File panel scroll — PageUp/Down always go to panel when it's open
+    if app.file_panel.is_some() {
+        match key.code {
+            KeyCode::PageUp   => { app.file_panel_scroll_up();   return; }
+            KeyCode::PageDown => { app.file_panel_scroll_down(); return; }
+            _ => {}
+        }
+    }
+
     // History focus mode: navigate blocks, copy selected, Esc/Tab back to input
     if app.chat_focus == ChatFocus::History {
         match key.code {
@@ -308,6 +317,8 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
             }
             KeyCode::Up   => app.history_nav_prev(),
             KeyCode::Down => app.history_nav_next(),
+            KeyCode::Enter => app.cycle_message_attachment(),
+            KeyCode::Char('q') => app.close_file_panel(),
             KeyCode::Char('y') if ctrl => app.copy_block(app.history_cursor),
             _ => {}
         }

@@ -17,6 +17,7 @@ pub struct Neuron {
     pub name: String,
     pub description: String,
     pub shell: bool,           // passthrough: any trigger is executed as a shell command
+    pub tooling: bool,         // explicit opt-in to on-demand classification in Smart mode
     pub system_prompt: String, // concatenated thoughts — injected into the system message
     pub example: String,       // few-shot example from neuron.toml body
     pub synapses: Vec<Synapse>,
@@ -147,6 +148,7 @@ fn parse_neuron(meta_src: &str, thoughts: &[&str], synapse_srcs: &[&str]) -> Neu
     let mut name        = String::new();
     let mut description = String::new();
     let mut shell       = false;
+    let mut tooling     = false;
 
     for line in header.lines() {
         if let Some((k, v)) = line.split_once('=') {
@@ -154,6 +156,7 @@ fn parse_neuron(meta_src: &str, thoughts: &[&str], synapse_srcs: &[&str]) -> Neu
                 "name"        => name        = v.trim().to_string(),
                 "description" => description = v.trim().to_string(),
                 "shell"       => shell       = v.trim() == "true",
+                "tooling"     => tooling     = v.trim() == "true",
                 _ => {}
             }
         }
@@ -166,7 +169,7 @@ fn parse_neuron(meta_src: &str, thoughts: &[&str], synapse_srcs: &[&str]) -> Neu
         .collect::<Vec<_>>()
         .join("\n");
     let synapses = synapse_srcs.iter().filter_map(|src| parse_synapse(src)).collect();
-    Neuron { name, description, shell, system_prompt, example: body.to_string(), synapses }
+    Neuron { name, description, shell, tooling, system_prompt, example: body.to_string(), synapses }
 }
 
 fn parse_synapse(src: &str) -> Option<Synapse> {

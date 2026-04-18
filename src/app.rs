@@ -121,7 +121,7 @@ pub fn load_config() -> Config {
 
 /// Returns true if the neuron has active tool capabilities (shell passthrough or synapse tools).
 pub fn neuron_is_tooling(n: &crate::synapse::Neuron) -> bool {
-    n.shell || !n.synapses.is_empty()
+    n.shell || !n.synapses.is_empty() || n.tooling
 }
 
 pub fn fuzzy_match(query: &str, target: &str) -> bool {

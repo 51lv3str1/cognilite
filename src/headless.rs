@@ -359,25 +359,35 @@ fn ask_interactive(kind: &AskKind, question: &str, auto_yes: bool) -> String {
 }
 
 /// Returns the byte offset up to which `content[from..]` can be safely printed,
-/// stopping before any potential internal tag prefix (<tool>, <load_neuron>, etc.).
+/// skipping completed `<think>` blocks and stopping before any protocol tag.
 fn safe_print_boundary(content: &str, from: usize) -> usize {
-    let rest = &content[from..];
-    for (i, _) in rest.match_indices('<') {
-        if is_tag_prefix(&rest[i..]) {
-            return from + i;
-        }
-    }
-    content.len()
-}
-
-fn is_tag_prefix(s: &str) -> bool {
-    const TAGS: &[&str] = &[
+    const STOP_TAGS: &[&str] = &[
         "<tool>", "</tool>",
         "<load_neuron>", "</load_neuron>",
         "<ask", "</ask>",
         "<patch>", "</patch>",
         "<mood>", "</mood>",
-        "<think>", "</think>",
     ];
-    TAGS.iter().any(|tag| tag.starts_with(s) || s.starts_with(tag))
+    let mut pos = from;
+    loop {
+        let rest = &content[pos..];
+        let Some(rel) = rest.find('<') else { return content.len(); };
+        let abs = pos + rel;
+        let slice = &content[abs..];
+        if slice.starts_with("<think>") {
+            match slice.find("</think>") {
+                Some(end) => { pos = abs + end + 8; continue; }
+                None => return abs,
+            }
+        }
+        if slice.len() < 2 { return abs; }
+        let second = &slice[1..2];
+        if !matches!(second, "t" | "l" | "a" | "p" | "m" | "/") {
+            pos = abs + 1; continue;
+        }
+        if STOP_TAGS.iter().any(|tag| tag.starts_with(slice) || slice.starts_with(tag)) {
+            return abs;
+        }
+        pos = abs + 1;
+    }
 }

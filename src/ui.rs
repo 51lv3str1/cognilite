@@ -181,10 +181,13 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
                 let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
                 let desc = if neuron.description.is_empty() { String::new() } else { format!("  —  {}", neuron.description) };
+                let tok = (neuron.system_prompt.len() / 4) as u64;
+                let tok_str = format!("  ~{tok}tok");
                 frame.render_widget(Paragraph::new(Line::from(vec![
                     Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
                     Span::styled(&neuron.name, name_style),
                     Span::styled(desc, desc_style),
+                    Span::styled(tok_str, bg.patch(Style::default().fg(THINKING_COLOR))),
                 ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
             }
         }

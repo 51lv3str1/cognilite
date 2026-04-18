@@ -270,7 +270,8 @@ pub struct App {
     pub stream_rx: Option<mpsc::Receiver<StreamChunk>>,
     pub warmup_rx: Option<mpsc::Receiver<()>>,
     pub warmup_started_at: Option<std::time::Instant>,
-    pub warmup_prompt_tokens: Option<u64>, // estimated tokens in the system prompt being pre-filled
+    pub warmup_prompt_tokens: Option<u64>,
+    pub warmup_last_hash: Option<u64>,     // hash of the system prompt used in the last warmup
     pub stream_started_at: Option<std::time::Instant>,
     pub thinking_end_secs: Option<f64>, // captured when first content token arrives
     pub completion: Option<Completion>,
@@ -348,6 +349,7 @@ impl App {
             warmup_rx: None,
             warmup_started_at: None,
             warmup_prompt_tokens: None,
+            warmup_last_hash: None,
             stream_started_at: None,
             thinking_end_secs: None,
             completion: None,
@@ -467,6 +469,7 @@ impl App {
         if let Some(entry) = self.models.get(self.model_cursor) {
             let name = entry.name.clone();
             self.selected_model = Some(name.clone());
+            self.warmup_last_hash = None;
             self.context_length = crate::ollama::fetch_context_length(&self.base_url, &name);
             let enabled: Vec<&crate::synapse::Neuron> = self.neurons.iter()
                 .filter(|n| !self.disabled_neurons.contains(&n.name))
@@ -969,6 +972,15 @@ impl App {
         let Some(model) = self.selected_model.clone() else { return };
         let system = self.full_system_prompt();
         if system.is_empty() { return; }
+        let hash = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut h = DefaultHasher::new();
+            system.hash(&mut h);
+            h.finish()
+        };
+        if self.warmup_last_hash == Some(hash) { return; }
+        self.warmup_last_hash = Some(hash);
         let num_ctx = match self.ctx_strategy {
             CtxStrategy::Full => self.context_length,
             CtxStrategy::Dynamic => self.context_length.map(|max| {

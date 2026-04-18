@@ -421,8 +421,8 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     let full_area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), full_area);
 
-    // Split horizontally when file panel is open
-    let (area, panel_area_opt) = if app.file_panel.is_some() {
+    // Split horizontally when file panel is open and visible
+    let (area, panel_area_opt) = if app.file_panel.is_some() && app.file_panel_visible {
         let [left, right] = Layout::horizontal([
             Constraint::Percentage(60),
             Constraint::Percentage(40),
@@ -950,7 +950,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             hint("Tab", "→ input"),
         ])
     } else if history_mode {
-        if app.file_panel.is_some() {
+        if app.file_panel.is_some() && app.file_panel_visible {
             Line::from(vec![
                 hint("↑/↓", "navigate"),
                 Span::raw("  "),

@@ -308,6 +308,7 @@ pub struct App {
     pub file_picker: Option<FilePicker>,
     // file panel (right-side code viewer)
     pub file_panel: Option<FilePanel>,
+    pub file_panel_visible: bool,
     pub file_panel_attachment: Option<(usize, usize)>, // (msg_idx, att_idx)
     // highlight cache: path → (mtime, highlighted lines)
     pub highlight_cache: HashMap<PathBuf, (std::time::SystemTime, Vec<Line<'static>>)>,
@@ -399,6 +400,7 @@ impl App {
             pinned_files: Vec::new(),
             file_picker: None,
             file_panel: None,
+            file_panel_visible: true,
             file_panel_attachment: None,
             highlight_cache: HashMap::new(),
         }
@@ -1077,6 +1079,15 @@ impl App {
             self.highlight_cache.insert(path.clone(), (mt, lines.clone()));
         }
         self.file_panel = Some(FilePanel { path, display_path, lines, scroll: 0, mtime, reloaded_at: None });
+        self.file_panel_visible = true;
+    }
+
+    pub fn toggle_file_panel(&mut self) {
+        if self.file_panel.is_none() { return; }
+        self.file_panel_visible = !self.file_panel_visible;
+        if !self.file_panel_visible && self.chat_focus == ChatFocus::FilePanel {
+            self.chat_focus = ChatFocus::Input;
+        }
     }
 
     pub fn close_file_panel(&mut self) {

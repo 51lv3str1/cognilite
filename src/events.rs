@@ -298,6 +298,12 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
     let ctrl  = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt   = key.modifiers.contains(KeyModifiers::ALT);
 
+    // Ctrl+B: toggle file panel visibility (works in any focus mode)
+    if ctrl && key.code == KeyCode::Char('b') {
+        app.toggle_file_panel();
+        return;
+    }
+
     // FilePanel focus mode
     if app.chat_focus == ChatFocus::FilePanel {
         match key.code {
@@ -317,7 +323,7 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
     if app.chat_focus == ChatFocus::History {
         match key.code {
             KeyCode::Tab => {
-                if app.file_panel.is_some() {
+                if app.file_panel.is_some() && app.file_panel_visible {
                     app.chat_focus = ChatFocus::FilePanel;
                 } else {
                     app.chat_focus = ChatFocus::Input;

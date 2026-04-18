@@ -268,7 +268,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 }
                 _ => {
                     // Presets
-                    // cursor layout: 0 = Pure model, 1..=n = user presets, n+1 = + New
+                    // cursor layout: 0 = Raw, 1..=n = user presets, n+1 = + New
                     let mut y = content_y;
 
                     // Name input when creating
@@ -281,14 +281,14 @@ fn draw_config(frame: &mut Frame, app: &App) {
                         return;
                     }
 
-                    // Built-in: Pure model (no neurons)
+                    // Built-in: Raw (no neurons)
                     let pure_active   = app.active_preset.as_deref() == Some("__pure__");
                     let pure_selected = app.preset_cursor == 0;
                     let (pure_marker, pure_fg) = if pure_active { ("●", ACCENT) } else { ("○", DIM) };
                     let pure_bg = if pure_selected { Style::default().bg(SURFACE) } else { Style::default() };
                     frame.render_widget(Paragraph::new(Line::from(vec![
                         Span::styled(format!("  {pure_marker} "), pure_bg.patch(Style::default().fg(pure_fg))),
-                        Span::styled("Pure model", pure_bg.patch(Style::default().fg(Color::White).add_modifier(if pure_selected { Modifier::BOLD } else { Modifier::empty() }))),
+                        Span::styled("Raw", pure_bg.patch(Style::default().fg(Color::White).add_modifier(if pure_selected { Modifier::BOLD } else { Modifier::empty() }))),
                         Span::styled("   no neurons loaded", pure_bg.patch(Style::default().fg(DIM))),
                     ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
                     y += 2;

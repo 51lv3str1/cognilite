@@ -380,6 +380,12 @@ fn safe_print_boundary(content: &str, from: usize) -> usize {
                 None => return abs,
             }
         }
+        if slice.starts_with("<thought>") {
+            match slice.find("</thought>") {
+                Some(end) => { pos = abs + end + 10; continue; }
+                None => return abs,
+            }
+        }
         if slice.len() < 2 { return abs; }
         let second = &slice[1..2];
         if !matches!(second, "t" | "l" | "a" | "p" | "m" | "/") {

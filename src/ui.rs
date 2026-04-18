@@ -1735,22 +1735,22 @@ enum ContentSegment {
 }
 
 fn strip_think_blocks(content: &str) -> String {
+    const PAIRS: &[(&str, &str)] = &[("<think>", "</think>"), ("<thought>", "</thought>")];
     let mut out = String::new();
     let mut rest = content;
     loop {
-        match rest.find("<think>") {
-            Some(start) => {
+        let earliest = PAIRS.iter()
+            .filter_map(|(open, _)| rest.find(open).map(|i| (i, *open)))
+            .min_by_key(|(i, _)| *i);
+        match earliest {
+            None => { out.push_str(rest); break; }
+            Some((start, open)) => {
                 out.push_str(&rest[..start]);
-                match rest[start..].find("</think>") {
-                    Some(end) => {
-                        rest = rest[start + end + 8..].trim_start_matches('\n');
-                    }
-                    None => break, // unclosed block while streaming — skip remainder
+                let close = PAIRS.iter().find(|(o, _)| *o == open).map(|(_, c)| *c).unwrap();
+                match rest[start..].find(close) {
+                    Some(end) => { rest = rest[start + end + close.len()..].trim_start_matches('\n'); }
+                    None => break, // unclosed — skip remainder while streaming
                 }
-            }
-            None => {
-                out.push_str(rest);
-                break;
             }
         }
     }

@@ -170,25 +170,32 @@ fn handle_config(app: &mut App, key: KeyEvent) {
                 if key.code == KeyCode::Left || key.code == KeyCode::Right {
                     app.set_neuron_mode(NeuronMode::Presets);
                 }
-                let preset_count = app.neuron_presets.len();
+                // cursor: 0=Pure, 1..=n=user presets, n+1=+New
+                let new_idx = app.neuron_presets.len() + 1;
                 match key.code {
                     KeyCode::Up => {
                         if app.preset_cursor > 0 { app.preset_cursor -= 1; }
                     }
                     KeyCode::Down => {
-                        app.preset_cursor = (app.preset_cursor + 1).min(preset_count);
+                        app.preset_cursor = (app.preset_cursor + 1).min(new_idx);
                     }
                     KeyCode::Enter | KeyCode::Char(' ') => {
-                        if app.preset_cursor == preset_count {
-                            // "+ New" entry
+                        if app.preset_cursor == 0 {
+                            app.apply_preset("__pure__");
+                        } else if app.preset_cursor == new_idx {
                             app.preset_name_input = Some(String::new());
-                        } else if let Some(preset) = app.neuron_presets.get(app.preset_cursor) {
+                        } else if let Some(preset) = app.neuron_presets.get(app.preset_cursor - 1) {
                             let name = preset.name.clone();
                             app.apply_preset(&name);
                         }
                     }
                     KeyCode::Char('n') => { app.preset_name_input = Some(String::new()); }
-                    KeyCode::Char('d') | KeyCode::Delete => { app.delete_preset(); }
+                    KeyCode::Char('d') | KeyCode::Delete => {
+                        if app.preset_cursor > 0 && app.preset_cursor <= app.neuron_presets.len() {
+                            app.preset_cursor -= 1;
+                            app.delete_preset();
+                        }
+                    }
                     _ => {}
                 }
             }

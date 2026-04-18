@@ -1055,6 +1055,7 @@ impl App {
         match self.neuron_mode {
             NeuronMode::Presets => {
                 if let Some(ref pname) = self.active_preset {
+                    if pname == "__pure__" { return vec![]; }
                     if let Some(preset) = self.neuron_presets.iter().find(|p| &p.name == pname) {
                         return self.neurons.iter()
                             .filter(|n| preset.enabled.contains(&n.name))

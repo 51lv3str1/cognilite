@@ -268,6 +268,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 }
                 _ => {
                     // Presets
+                    // cursor layout: 0 = Pure model, 1..=n = user presets, n+1 = + New
                     let mut y = content_y;
 
                     // Name input when creating
@@ -280,19 +281,21 @@ fn draw_config(frame: &mut Frame, app: &App) {
                         return;
                     }
 
-                    // "+ New" entry
-                    let new_cursor = app.preset_cursor == 0 && app.neuron_presets.is_empty()
-                        || app.preset_cursor >= app.neuron_presets.len();
-                    let new_selected = app.preset_cursor == app.neuron_presets.len();
-                    let new_bg = if new_selected { Style::default().bg(SURFACE) } else { Style::default() };
+                    // Built-in: Pure model (no neurons)
+                    let pure_active   = app.active_preset.as_deref() == Some("__pure__");
+                    let pure_selected = app.preset_cursor == 0;
+                    let (pure_marker, pure_fg) = if pure_active { ("●", ACCENT) } else { ("○", DIM) };
+                    let pure_bg = if pure_selected { Style::default().bg(SURFACE) } else { Style::default() };
                     frame.render_widget(Paragraph::new(Line::from(vec![
-                        Span::styled("  + ", new_bg.patch(Style::default().fg(ACCENT))),
-                        Span::styled("New preset from current selection", new_bg.patch(Style::default().fg(if new_selected { Color::White } else { DIM }))),
+                        Span::styled(format!("  {pure_marker} "), pure_bg.patch(Style::default().fg(pure_fg))),
+                        Span::styled("Pure model", pure_bg.patch(Style::default().fg(Color::White).add_modifier(if pure_selected { Modifier::BOLD } else { Modifier::empty() }))),
+                        Span::styled("   no neurons loaded", pure_bg.patch(Style::default().fg(DIM))),
                     ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
                     y += 2;
 
+                    // User presets (cursor offset by 1)
                     for (i, preset) in app.neuron_presets.iter().enumerate() {
-                        let selected = i == app.preset_cursor;
+                        let selected = app.preset_cursor == i + 1;
                         let active   = app.active_preset.as_deref() == Some(&preset.name);
                         let (marker, marker_fg) = if active { ("●", ACCENT) } else { ("○", DIM) };
                         let bg = if selected { Style::default().bg(SURFACE) } else { Style::default() };
@@ -306,12 +309,15 @@ fn draw_config(frame: &mut Frame, app: &App) {
                         y += 1;
                     }
 
-                    if app.neuron_presets.is_empty() {
-                        frame.render_widget(Paragraph::new(Line::from(
-                            Span::styled("  No presets yet. Press Enter on '+ New' to create one.", Style::default().fg(DIM))
-                        )), Rect { x: inner.x, y, width: inner.width, height: 1 });
-                    }
-                    let _ = new_cursor;
+                    // "+ New" at bottom
+                    let new_idx = app.neuron_presets.len() + 1;
+                    let new_selected = app.preset_cursor == new_idx;
+                    let new_bg = if new_selected { Style::default().bg(SURFACE) } else { Style::default() };
+                    y += 1;
+                    frame.render_widget(Paragraph::new(Line::from(vec![
+                        Span::styled("  + ", new_bg.patch(Style::default().fg(ACCENT))),
+                        Span::styled("New preset from current selection", new_bg.patch(Style::default().fg(if new_selected { Color::White } else { DIM }))),
+                    ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
                 }
             }
         }

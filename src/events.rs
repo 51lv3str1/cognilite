@@ -231,8 +231,8 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
                     app.file_picker_go_up();
                 }
             }
-            KeyCode::Char('u') if ctrl => app.file_picker_scroll_preview_up(),
-            KeyCode::Char('d') if ctrl => app.file_picker_scroll_preview_down(),
+            KeyCode::PageUp   => app.file_picker_scroll_preview_up(),
+            KeyCode::PageDown => app.file_picker_scroll_preview_down(),
             KeyCode::Char(c) => {
                 if let Some(fp) = &mut app.file_picker { fp.query.push(c); fp.cursor = 0; }
                 app.update_preview();

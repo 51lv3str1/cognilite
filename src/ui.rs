@@ -1064,7 +1064,7 @@ fn draw_file_picker(frame: &mut Frame, app: &App, area: Rect) {
         Block::default()
             .title(Span::styled(" 📎 pin files ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
             .title_bottom(Span::styled(
-                " ↑↓ navigate  Enter/→ enter/pin  ← up  Ctrl+U/D scroll preview  Esc close ",
+                " ↑↓ navigate  Enter/→ enter/pin  ← up  PgUp/PgDn scroll preview  Esc close ",
                 Style::default().fg(DIM),
             ))
             .borders(Borders::ALL)

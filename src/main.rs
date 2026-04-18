@@ -1,5 +1,6 @@
 mod app;
 mod clipboard;
+mod headless;
 mod synapse;
 mod events;
 mod ollama;
@@ -13,6 +14,11 @@ use app::App;
 const OLLAMA_BASE_URL: &str = "http://localhost:11434";
 
 fn main() -> Result<()> {
+    if let Some(args) = parse_headless_args() {
+        let code = headless::run(OLLAMA_BASE_URL, args);
+        std::process::exit(code);
+    }
+
     color_eyre::install()?;
     ratatui::run(|terminal| {
         crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
@@ -24,6 +30,58 @@ fn main() -> Result<()> {
         result
     })?;
     Ok(())
+}
+
+fn parse_headless_args() -> Option<headless::HeadlessArgs> {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if !argv.iter().any(|a| a == "--headless") {
+        return None;
+    }
+    let mut ha = headless::HeadlessArgs::default();
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--headless" => {}
+            "--model" | "-m" => {
+                i += 1; if i < argv.len() { ha.model = Some(argv[i].clone()); }
+            }
+            "--neuron-mode" => {
+                i += 1; if i < argv.len() { ha.neuron_mode = Some(app::NeuronMode::from_str(&argv[i])); }
+            }
+            "--preset" => {
+                i += 1; if i < argv.len() { ha.preset = Some(argv[i].clone()); }
+            }
+            "--no-neuron" => {
+                i += 1; if i < argv.len() { ha.no_neurons.push(argv[i].clone()); }
+            }
+            "--temperature" => {
+                i += 1; if i < argv.len() { ha.temperature = argv[i].parse().ok(); }
+            }
+            "--top-p" => {
+                i += 1; if i < argv.len() { ha.top_p = argv[i].parse().ok(); }
+            }
+            "--repeat-penalty" => {
+                i += 1; if i < argv.len() { ha.repeat_penalty = argv[i].parse().ok(); }
+            }
+            "--ctx-strategy" => {
+                i += 1; if i < argv.len() { ha.ctx_strategy = Some(app::CtxStrategy::from_str(&argv[i])); }
+            }
+            "--keep-alive" => { ha.keep_alive = true; }
+            "--pin" => {
+                i += 1; if i < argv.len() { ha.pin.push(argv[i].clone()); }
+            }
+            "--attach" => {
+                i += 1; if i < argv.len() { ha.attach.push(argv[i].clone()); }
+            }
+            "--yes" | "-y" => { ha.yes = true; }
+            arg if !arg.starts_with('-') => {
+                ha.message = Some(arg.to_string());
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Some(ha)
 }
 
 fn load_models(app: &mut App) {

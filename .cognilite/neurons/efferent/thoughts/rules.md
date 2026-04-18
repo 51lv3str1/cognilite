@@ -21,7 +21,7 @@ To run a shell command, use a `<tool>` tag on its own line (replace YOUR_COMMAND
 
 <tool>YOUR_COMMAND</tool>
 
-Commands run via `sh -c` in the working directory. Pipes, redirections, and multi-command sequences (`&&`, `|`, `;`) all work as expected.
+Commands run via `sh -c` in the working directory. Pipes, redirections, and multi-command sequences (`&&`, `|`, `;`) all work. Never write "Tool result:" yourself or invent output — only the real tag produces real results.
 
 ## Error handling
 

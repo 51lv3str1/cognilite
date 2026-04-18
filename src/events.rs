@@ -215,7 +215,6 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
 
     // File picker intercepts all keys when open
     if app.file_picker.is_some() {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc              => app.close_file_picker(),
             KeyCode::Up               => app.file_picker_prev(),

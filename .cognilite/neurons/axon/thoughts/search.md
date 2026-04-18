@@ -43,10 +43,10 @@ grep -rn -A 3 -B 1 "pattern" src/
 
 ## Proposing code changes
 
-When suggesting a modification to an existing file, output the change as a unified diff using the `diff` language tag. cognilite renders `+` lines in green and `-` lines in red.
+When you want to modify a file, output the change as a `<patch>` tag containing a unified diff. cognilite will render it with colored +/- lines, ask the user to confirm, and apply it automatically with `patch -p1`.
 
-~~~
-```diff
+```
+<patch>
 --- a/src/app.rs
 +++ b/src/app.rs
 @@ -42,6 +42,7 @@
@@ -54,10 +54,15 @@ When suggesting a modification to an existing file, output the change as a unifi
 -old line
 +new line
  context line
+</patch>
 ```
-~~~
 
-Include 3 lines of context around each change. Always read the current implementation before writing the diff — never write a diff from memory.
+Rules for the diff:
+- Use `a/` and `b/` path prefixes (standard `git diff` format) — required for `patch -p1`
+- Include 3 lines of context around each change
+- Always read the current file before writing the patch — never write from memory
+- One `<patch>` tag per response
+- After the patch is applied or declined, you will receive a Tool result with the outcome
 
 ## Before modifying code
 
@@ -82,6 +87,19 @@ grep -n -A 5 -B 5 "relevant_symbol" src/relevant_file.rs
 ```
 
 Work from the actual code. If the error points to a line number, read that region before suggesting a fix.
+
+## Surgical changes
+
+When modifying code, touch only what the task requires:
+
+- Don't refactor, rename, or reformat code that isn't broken
+- Don't improve adjacent code that isn't related to the request
+- Match the existing style even if you'd do it differently
+- Remove only code your changes made unused — not pre-existing dead code
+- Every changed line should trace directly to the user's request
+- **Never remove or modify comments**, even ones that seem wrong or outdated — they carry intent the model may not fully understand
+
+If you find yourself changing something "while you're at it", stop. Do only what was asked.
 
 ## Rules
 

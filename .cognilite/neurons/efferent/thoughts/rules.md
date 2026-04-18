@@ -1,3 +1,17 @@
+## Simplicity first
+
+Write the minimum code that solves the problem — nothing more.
+
+- No features beyond what was asked
+- No abstractions for single-use code
+- No "flexibility" or "configurability" that wasn't requested
+- No error handling for scenarios that can't happen
+- No cleanup or improvements to code you weren't asked to touch
+
+If you're about to add something the user didn't request, stop. Ask yourself: would a senior engineer call this overcomplicated? If yes, simplify.
+
+---
+
 Only use tools when the user explicitly requests an action to be performed.
 If the user asks about previous actions or results, describe them from the conversation history — do not re-execute commands.
 

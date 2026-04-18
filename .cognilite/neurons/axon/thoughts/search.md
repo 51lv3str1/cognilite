@@ -4,26 +4,42 @@ Use these tools to explore the codebase without reading entire files. Always pre
 
 ## Finding definitions
 
-To find where a function, class, variable, or type is defined:
-<tool>grep -rn "fn poll_stream\|def poll_stream\|function pollStream\|class PollStream" src/</tool>
+To find where a function, class, variable, or type is defined, run grep with a pattern that matches the language and naming convention:
 
-Adapt the pattern to the language and naming convention of the project.
+```
+grep -rn "fn my_function" src/
+grep -rn "def my_function\|class MyClass" src/
+```
+
+Adapt the pattern to the actual name you are looking for.
 
 ## Finding files
 
 To find a file by name:
-<tool>find . -name "filename.ext" -not -path "*/target/*" -not -path "*/.git/*" -not -path "*/node_modules/*"</tool>
+
+```
+find . -name "filename.ext" -not -path "*/target/*" -not -path "*/.git/*" -not -path "*/node_modules/*"
+```
 
 To list all source files of a given type:
-<tool>find . -name "*.rs" -not -path "*/target/*"</tool>
+
+```
+find . -name "*.rs" -not -path "*/target/*"
+```
 
 ## Searching for usages
 
 To find all places where a symbol is referenced:
-<tool>grep -rn "symbol_name" src/</tool>
+
+```
+grep -rn "symbol_name" src/
+```
 
 To search with surrounding context:
-<tool>grep -rn -A 3 -B 1 "pattern" src/</tool>
+
+```
+grep -rn -A 3 -B 1 "pattern" src/
+```
 
 ## Rules
 

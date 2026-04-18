@@ -41,6 +41,24 @@ To search with surrounding context:
 grep -rn -A 3 -B 1 "pattern" src/
 ```
 
+## Proposing code changes
+
+When suggesting a modification to an existing file, output the change as a unified diff using the `diff` language tag. cognilite renders `+` lines in green and `-` lines in red.
+
+~~~
+```diff
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -42,6 +42,7 @@
+ context line
+-old line
++new line
+ context line
+```
+~~~
+
+Include 3 lines of context around each change. Always read the current implementation before writing the diff — never write a diff from memory.
+
 ## Before modifying code
 
 Before proposing changes to an existing function, type, or module:

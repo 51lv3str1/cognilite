@@ -1227,12 +1227,35 @@ fn render_code_block(lang: &str, code: &str, width: usize) -> Vec<Line<'static>>
         Span::raw("  "),
         Span::styled(label, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
     ]));
+
+    let is_diff = lang == "diff"
+        || (code.contains("\n+") && code.contains("\n-") && code.contains("@@"));
+
     for code_line in code.trim_matches('\n').lines() {
         let truncated: String = code_line.chars().take(width.saturating_sub(4)).collect();
-        out.push(Line::from(vec![
-            Span::styled("  ▎ ", Style::default().fg(CODE_BORDER)),
-            Span::styled(truncated, Style::default().fg(CODE_FG)),
-        ]));
+        if is_diff {
+            let (gutter, gutter_style, text_style) =
+                if code_line.starts_with('+') && !code_line.starts_with("+++") {
+                    ("  + ", Style::default().fg(USER_COLOR), Style::default().fg(USER_COLOR))
+                } else if code_line.starts_with('-') && !code_line.starts_with("---") {
+                    ("  - ", Style::default().fg(ERROR_COLOR), Style::default().fg(ERROR_COLOR))
+                } else if code_line.starts_with("@@") {
+                    ("  ▎ ", Style::default().fg(ACCENT), Style::default().fg(ACCENT))
+                } else if code_line.starts_with("---") || code_line.starts_with("+++") {
+                    ("  ▎ ", Style::default().fg(DIM), Style::default().fg(DIM))
+                } else {
+                    ("  ▎ ", Style::default().fg(CODE_BORDER), Style::default().fg(CODE_FG))
+                };
+            out.push(Line::from(vec![
+                Span::styled(gutter, gutter_style),
+                Span::styled(truncated, text_style),
+            ]));
+        } else {
+            out.push(Line::from(vec![
+                Span::styled("  ▎ ", Style::default().fg(CODE_BORDER)),
+                Span::styled(truncated, Style::default().fg(CODE_FG)),
+            ]));
+        }
     }
     out.push(Line::raw(""));
     out

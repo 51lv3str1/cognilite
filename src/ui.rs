@@ -762,10 +762,17 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             Role::Tool => {
                 if is_selected { selected_line = Some(lines.len() as u16); }
                 if msg.attachments.is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::styled("  ✗ ", Style::default().fg(ERROR_COLOR)),
-                        Span::styled(msg.content.clone(), Style::default().fg(ERROR_COLOR)),
-                    ]));
+                    if let Some(ref label) = msg.tool_call {
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("  {label}  "), Style::default().fg(DIM)),
+                            Span::styled(msg.content.clone(), Style::default().fg(ACCENT)),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::styled("  ✗ ", Style::default().fg(ERROR_COLOR)),
+                            Span::styled(msg.content.clone(), Style::default().fg(ERROR_COLOR)),
+                        ]));
+                    }
                 } else {
                     let att = &msg.attachments[0];
                     let size_str = if att.size >= 1024 {

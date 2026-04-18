@@ -19,7 +19,8 @@ pub struct HeadlessArgs {
     pub keep_alive: bool,
     pub pin: Vec<String>,
     pub attach: Vec<String>,
-    pub yes: bool, // auto-confirm all <ask type="confirm"> prompts
+    pub yes: bool,     // auto-confirm all <ask type="confirm"> prompts
+    pub thinking: bool, // stream thinking content to stderr
 }
 
 impl Default for HeadlessArgs {
@@ -27,7 +28,8 @@ impl Default for HeadlessArgs {
         Self {
             message: None, model: None, neuron_mode: None, preset: None,
             no_neurons: vec![], temperature: None, top_p: None, repeat_penalty: None,
-            ctx_strategy: None, keep_alive: false, pin: vec![], attach: vec![], yes: false,
+            ctx_strategy: None, keep_alive: false, pin: vec![], attach: vec![],
+            yes: false, thinking: false,
         }
     }
 }
@@ -120,10 +122,10 @@ pub fn run(base_url: &str, args: HeadlessArgs) -> i32 {
     });
     app.start_stream();
 
-    run_stream_loop(&mut app, args.yes)
+    run_stream_loop(&mut app, args.yes, args.thinking)
 }
 
-fn run_stream_loop(app: &mut App, auto_yes: bool) -> i32 {
+fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool) -> i32 {
     'outer: loop {
         let rx = match app.stream_rx.take() {
             Some(r) => r,
@@ -132,6 +134,7 @@ fn run_stream_loop(app: &mut App, auto_yes: bool) -> i32 {
         // tracks how many bytes of the current assistant message have been printed;
         // reset each outer iteration so tag stripping from previous turns doesn't bleed over
         let mut printed_up_to: usize = 0;
+        let mut thinking_open = false; // whether we've printed the [thinking] header
 
         loop {
             let chunk = match rx.recv() {
@@ -151,7 +154,16 @@ fn run_stream_loop(app: &mut App, auto_yes: bool) -> i32 {
                         last.content.push_str(&msg.content);
                         last.llm_content.push_str(&msg.content);
                         if let Some(ref t) = msg.thinking {
-                            last.thinking.push_str(t);
+                            if !t.is_empty() {
+                                if show_thinking {
+                                    if !thinking_open {
+                                        eprintln!("[thinking]");
+                                        thinking_open = true;
+                                    }
+                                    eprint!("{t}");
+                                }
+                                last.thinking.push_str(t);
+                            }
                         }
                     }
                 }
@@ -309,6 +321,7 @@ fn run_stream_loop(app: &mut App, auto_yes: bool) -> i32 {
             }
 
             if chunk.done {
+                if thinking_open { eprintln!("\n[/thinking]"); }
                 println!();
                 if let (Some(pt), Some(et), Some(ed)) = (
                     chunk.prompt_eval_count, chunk.eval_count, chunk.eval_duration,

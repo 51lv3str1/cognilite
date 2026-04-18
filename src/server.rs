@@ -126,9 +126,11 @@ fn build_argv(val: &serde_json::Value, ollama_url: &str, message: &str) -> Vec<S
         "--message".to_string(), message.to_string(),
     ];
 
-    // Auto-confirm only when the caller explicitly opts in
     if val.get("yes").and_then(|v| v.as_bool()).unwrap_or(false) {
         argv.push("--yes".to_string());
+    }
+    if val.get("thinking").and_then(|v| v.as_bool()).unwrap_or(false) {
+        argv.push("--thinking".to_string());
     }
 
     if let Some(v) = val.get("model").and_then(|v| v.as_str()) {

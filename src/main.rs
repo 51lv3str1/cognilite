@@ -114,6 +114,7 @@ fn parse_headless_args(argv: &[String]) -> Option<headless::HeadlessArgs> {
                 i += 1; if i < argv.len() { ha.attach.push(argv[i].clone()); }
             }
             "--yes" | "-y" => { ha.yes = true; }
+            "--thinking" => { ha.thinking = true; }
             arg if !arg.starts_with('-') => {
                 ha.message = Some(arg.to_string());
             }

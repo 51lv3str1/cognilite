@@ -215,6 +215,7 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
 
     // File picker intercepts all keys when open
     if app.file_picker.is_some() {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc              => app.close_file_picker(),
             KeyCode::Up               => app.file_picker_prev(),
@@ -225,12 +226,16 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
                 let has_query = app.file_picker.as_ref().map(|fp| !fp.query.is_empty()).unwrap_or(false);
                 if has_query {
                     if let Some(fp) = &mut app.file_picker { fp.query.pop(); fp.cursor = 0; }
+                    app.update_preview();
                 } else {
                     app.file_picker_go_up();
                 }
             }
+            KeyCode::Char('u') if ctrl => app.file_picker_scroll_preview_up(),
+            KeyCode::Char('d') if ctrl => app.file_picker_scroll_preview_down(),
             KeyCode::Char(c) => {
                 if let Some(fp) = &mut app.file_picker { fp.query.push(c); fp.cursor = 0; }
+                app.update_preview();
             }
             _ => {}
         }

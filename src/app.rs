@@ -1,6 +1,15 @@
-use std::sync::mpsc;
+use std::sync::{mpsc, OnceLock};
 use std::path::{Path, PathBuf};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{FontStyle, ThemeSet};
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
 use crate::ollama::{ChatMessage, ModelEntry, StreamChunk};
+
+static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+static THEME_SET: OnceLock<ThemeSet>   = OnceLock::new();
 
 /// Generation parameter definitions: (name, description, default, min, max, step)
 pub const GEN_PARAMS: &[(&str, &str, f64, f64, f64, f64)] = &[
@@ -140,6 +149,8 @@ pub struct FilePicker {
     pub entries: Vec<FilePickerEntry>,
     pub cursor: usize,
     pub query: String,
+    pub preview: Vec<Line<'static>>,
+    pub preview_scroll: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -987,7 +998,11 @@ impl App {
     pub fn open_file_picker(&mut self) {
         let dir = self.working_dir.clone();
         let entries = load_picker_entries(&dir, &dir);
-        self.file_picker = Some(FilePicker { current_dir: dir, entries, cursor: 0, query: String::new() });
+        self.file_picker = Some(FilePicker {
+            current_dir: dir, entries, cursor: 0, query: String::new(),
+            preview: vec![], preview_scroll: 0,
+        });
+        self.update_preview();
     }
 
     pub fn close_file_picker(&mut self) {
@@ -1014,7 +1029,7 @@ impl App {
         let cursor  = self.file_picker.as_ref().map(|fp| fp.cursor).unwrap_or(0);
         let Some(entry) = visible.into_iter().nth(cursor) else { return };
         match entry {
-            FilePickerEntry::Parent => self.file_picker_go_up(),
+            FilePickerEntry::Parent => { self.file_picker_go_up(); return; } // go_up calls update_preview
             FilePickerEntry::Dir(name) => {
                 let new_dir    = self.file_picker.as_ref().unwrap().current_dir.join(&name);
                 let working_dir = self.working_dir.clone();
@@ -1037,33 +1052,41 @@ impl App {
                 }
             }
         }
+        self.update_preview();
     }
 
     pub fn file_picker_go_up(&mut self) {
-        let Some(fp) = &mut self.file_picker else { return };
-        if !fp.query.is_empty() {
-            fp.query.clear();
-            fp.cursor = 0;
+        if self.file_picker.is_none() { return; }
+
+        let query_non_empty = self.file_picker.as_ref().unwrap().query.len() > 0;
+        if query_non_empty {
+            if let Some(fp) = &mut self.file_picker { fp.query.clear(); fp.cursor = 0; }
+            self.update_preview();
             return;
         }
-        let parent = fp.current_dir.parent().map(|p| p.to_path_buf());
-        let working_dir = self.working_dir.clone();
-        if let Some(parent) = parent {
+
+        let (current_dir, working_dir) = {
+            let fp = self.file_picker.as_ref().unwrap();
+            (fp.current_dir.clone(), self.working_dir.clone())
+        };
+        if let Some(parent) = current_dir.parent() {
             if parent.starts_with(&working_dir) {
-                let entries = load_picker_entries(&parent, &working_dir);
+                let entries = load_picker_entries(parent, &working_dir);
                 if let Some(fp) = &mut self.file_picker {
-                    fp.current_dir = parent;
+                    fp.current_dir = parent.to_path_buf();
                     fp.entries     = entries;
                     fp.cursor      = 0;
                 }
             }
         }
+        self.update_preview();
     }
 
     pub fn file_picker_prev(&mut self) {
         if let Some(fp) = &mut self.file_picker {
             if fp.cursor > 0 { fp.cursor -= 1; }
         }
+        self.update_preview();
     }
 
     pub fn file_picker_next(&mut self) {
@@ -1071,6 +1094,39 @@ impl App {
         if let Some(fp) = &mut self.file_picker {
             if fp.cursor + 1 < len { fp.cursor += 1; }
         }
+        self.update_preview();
+    }
+
+    pub fn file_picker_scroll_preview_up(&mut self) {
+        if let Some(fp) = &mut self.file_picker {
+            fp.preview_scroll = fp.preview_scroll.saturating_sub(5);
+        }
+    }
+
+    pub fn file_picker_scroll_preview_down(&mut self) {
+        if let Some(fp) = &mut self.file_picker {
+            let max = fp.preview.len().saturating_sub(1);
+            fp.preview_scroll = (fp.preview_scroll + 5).min(max);
+        }
+    }
+
+    fn file_picker_selected_path(&self) -> Option<PathBuf> {
+        let fp = self.file_picker.as_ref()?;
+        let visible = self.file_picker_visible();
+        match visible.get(fp.cursor)? {
+            FilePickerEntry::File(display) => Some(self.working_dir.join(display)),
+            _ => None,
+        }
+    }
+
+    pub fn update_preview(&mut self) {
+        let path = self.file_picker_selected_path();
+        let Some(fp) = &mut self.file_picker else { return };
+        fp.preview_scroll = 0;
+        fp.preview = match path {
+            Some(p) => highlight_file(&p),
+            None    => vec![],
+        };
     }
 
     // --- synapse execution ---
@@ -1648,6 +1704,49 @@ fn load_picker_entries(dir: &Path, working_dir: &Path) -> Vec<FilePickerEntry> {
     if dir != working_dir { result.push(FilePickerEntry::Parent); }
     result.extend(dirs);
     result.extend(files);
+    result
+}
+
+fn highlight_file(path: &Path) -> Vec<Line<'static>> {
+    let ss = SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+    let ts = THEME_SET.get_or_init(ThemeSet::load_defaults);
+    let theme = &ts.themes["base16-ocean.dark"];
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return vec![Line::from(Span::styled(
+            "(binary or unreadable)".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ))],
+    };
+
+    let syntax = ss.find_syntax_for_file(path)
+        .ok().flatten()
+        .unwrap_or_else(|| ss.find_syntax_plain_text());
+
+    let mut h = HighlightLines::new(syntax, theme);
+    let mut result = Vec::new();
+
+    for (i, line) in LinesWithEndings::from(&content).enumerate().take(2000) {
+        let ranges = match h.highlight_line(line, ss) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let mut spans = vec![Span::styled(
+            format!("{:4} ", i + 1),
+            Style::default().fg(Color::Rgb(88, 91, 112)),
+        )];
+        for (style, text) in &ranges {
+            let text = text.trim_end_matches('\n').trim_end_matches('\r');
+            if text.is_empty() { continue; }
+            let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+            let mut s = Style::default().fg(fg);
+            if style.font_style.contains(FontStyle::BOLD)   { s = s.add_modifier(Modifier::BOLD); }
+            if style.font_style.contains(FontStyle::ITALIC) { s = s.add_modifier(Modifier::ITALIC); }
+            spans.push(Span::styled(text.to_string(), s));
+        }
+        result.push(Line::from(spans));
+    }
     result
 }
 

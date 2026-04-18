@@ -1,6 +1,7 @@
 mod app;
 mod clipboard;
 mod headless;
+mod server;
 mod synapse;
 mod events;
 mod ollama;
@@ -11,18 +12,28 @@ use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event}
 use color_eyre::Result;
 use app::App;
 
-const OLLAMA_BASE_URL: &str = "http://localhost:11434";
+const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
+const DEFAULT_SERVER_HOST: &str = "0.0.0.0";
+const DEFAULT_SERVER_PORT: u16 = 8765;
 
 fn main() -> Result<()> {
-    if let Some(args) = parse_headless_args() {
-        let code = headless::run(OLLAMA_BASE_URL, args);
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let ollama_url = get_ollama_url(&argv);
+
+    if let Some(args) = parse_headless_args(&argv) {
+        let code = headless::run(&ollama_url, args);
         std::process::exit(code);
+    }
+
+    if let Some((host, port)) = parse_server_args(&argv) {
+        server::run(&ollama_url, &host, port);
+        return Ok(());
     }
 
     color_eyre::install()?;
     ratatui::run(|terminal| {
         crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
-        let mut app = App::new(OLLAMA_BASE_URL.to_string());
+        let mut app = App::new(ollama_url.clone());
         App::prewarm_highlight();
         load_models(&mut app);
         let result = run_loop(terminal, &mut app);
@@ -32,8 +43,32 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn parse_headless_args() -> Option<headless::HeadlessArgs> {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+fn get_ollama_url(argv: &[String]) -> String {
+    let mut i = 0;
+    while i + 1 < argv.len() {
+        if argv[i] == "--ollama-url" { return argv[i + 1].clone(); }
+        i += 1;
+    }
+    std::env::var("OLLAMA_URL").unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_string())
+}
+
+fn parse_server_args(argv: &[String]) -> Option<(String, u16)> {
+    if !argv.iter().any(|a| a == "--server") { return None; }
+    let mut host = DEFAULT_SERVER_HOST.to_string();
+    let mut port = DEFAULT_SERVER_PORT;
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--host" => { i += 1; if i < argv.len() { host = argv[i].clone(); } }
+            "--port" => { i += 1; if i < argv.len() { port = argv[i].parse().unwrap_or(DEFAULT_SERVER_PORT); } }
+            _ => {}
+        }
+        i += 1;
+    }
+    Some((host, port))
+}
+
+fn parse_headless_args(argv: &[String]) -> Option<headless::HeadlessArgs> {
     if !argv.iter().any(|a| a == "--headless") {
         return None;
     }
@@ -41,7 +76,9 @@ fn parse_headless_args() -> Option<headless::HeadlessArgs> {
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
-            "--headless" => {}
+            "--headless" | "--server" => {}
+            // global flags with a value — skip both flag and value
+            "--ollama-url" | "--host" | "--port" => { i += 1; }
             "--model" | "-m" => {
                 i += 1; if i < argv.len() { ha.model = Some(argv[i].clone()); }
             }

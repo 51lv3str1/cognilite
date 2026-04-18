@@ -1,6 +1,10 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
+
+/// Only one session at a time may own the terminal stdin for interactive <ask> prompts.
+static STDIN_LOCK: Mutex<()> = Mutex::new(());
 
 /// Starts the HTTP server. Blocks until the process is killed.
 pub fn run(ollama_url: &str, host: &str, port: u16) {
@@ -65,10 +69,15 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String) {
 
     eprintln!("[server] {} — {}", peer, &message[..message.len().min(80)]);
 
-    let argv = build_argv(&val, &ollama_url);
+    let argv = build_argv(&val, &ollama_url, &message);
+
+    // Serialize: only one session at a time can use the terminal for interactive prompts.
+    // Concurrent non-interactive requests queue here and proceed as soon as the active one finishes.
+    let _guard = STDIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     let mut child = match Command::new(&exe)
         .args(&argv)
-        .stdin(Stdio::piped())
+        .stdin(Stdio::inherit())   // child reads <ask> responses directly from server terminal
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
@@ -80,10 +89,6 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String) {
             return;
         }
     };
-
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(message.as_bytes());
-    }
 
     let _ = write!(stream, "HTTP/1.1 200 OK\r\n");
     let _ = write!(stream, "Content-Type: text/plain; charset=utf-8\r\n");
@@ -111,14 +116,20 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String) {
     let _ = stream.flush();
     let _ = child.wait();
     eprintln!("[server] {} done", peer);
+    // _guard dropped here — next queued connection acquires STDIN_LOCK and proceeds
 }
 
-fn build_argv(val: &serde_json::Value, ollama_url: &str) -> Vec<String> {
+fn build_argv(val: &serde_json::Value, ollama_url: &str, message: &str) -> Vec<String> {
     let mut argv = vec![
         "--headless".to_string(),
-        "--yes".to_string(),
         "--ollama-url".to_string(), ollama_url.to_string(),
+        "--message".to_string(), message.to_string(),
     ];
+
+    // Auto-confirm only when the caller explicitly opts in
+    if val.get("yes").and_then(|v| v.as_bool()).unwrap_or(false) {
+        argv.push("--yes".to_string());
+    }
 
     if let Some(v) = val.get("model").and_then(|v| v.as_str()) {
         argv.extend(["--model".into(), v.into()]);

@@ -79,6 +79,9 @@ fn parse_headless_args(argv: &[String]) -> Option<headless::HeadlessArgs> {
             "--headless" | "--server" => {}
             // global flags with a value — skip both flag and value
             "--ollama-url" | "--host" | "--port" => { i += 1; }
+            "--message" => {
+                i += 1; if i < argv.len() { ha.message = Some(argv[i].clone()); }
+            }
             "--model" | "-m" => {
                 i += 1; if i < argv.len() { ha.model = Some(argv[i].clone()); }
             }

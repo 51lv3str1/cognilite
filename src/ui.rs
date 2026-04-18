@@ -1707,7 +1707,8 @@ fn render_assistant_content(
 
     // regular response content — split into text/code segments
     if !content.is_empty() {
-        let segments = parse_content_segments(content.trim());
+        let stripped = strip_think_blocks(content.trim());
+        let segments = parse_content_segments(&stripped);
         for seg in &segments {
             match seg {
                 ContentSegment::Text(text) => {
@@ -1731,6 +1732,29 @@ fn render_assistant_content(
 enum ContentSegment {
     Text(String),
     Code { lang: String, content: String },
+}
+
+fn strip_think_blocks(content: &str) -> String {
+    let mut out = String::new();
+    let mut rest = content;
+    loop {
+        match rest.find("<think>") {
+            Some(start) => {
+                out.push_str(&rest[..start]);
+                match rest[start..].find("</think>") {
+                    Some(end) => {
+                        rest = rest[start + end + 8..].trim_start_matches('\n');
+                    }
+                    None => break, // unclosed block while streaming — skip remainder
+                }
+            }
+            None => {
+                out.push_str(rest);
+                break;
+            }
+        }
+    }
+    out
 }
 
 fn parse_content_segments(content: &str) -> Vec<ContentSegment> {

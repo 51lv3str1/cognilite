@@ -51,6 +51,24 @@ fn config_path() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config/cognilite/config.json"))
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum NeuronMode { Manual, Smart, Presets }
+
+impl NeuronMode {
+    pub fn as_str(&self) -> &'static str {
+        match self { NeuronMode::Manual => "manual", NeuronMode::Smart => "smart", NeuronMode::Presets => "presets" }
+    }
+    pub fn from_str(s: &str) -> Self {
+        match s { "smart" => NeuronMode::Smart, "presets" => NeuronMode::Presets, _ => NeuronMode::Manual }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NeuronPreset {
+    pub name: String,
+    pub enabled: Vec<String>,
+}
+
 pub struct Config {
     pub ctx_strategy: CtxStrategy,
     pub disabled_neurons: std::collections::HashSet<String>,
@@ -58,17 +76,23 @@ pub struct Config {
     pub ctx_pow2: bool,
     pub keep_alive: bool,
     pub warmup: bool,
+    pub neuron_mode: NeuronMode,
+    pub neuron_presets: Vec<NeuronPreset>,
+    pub active_preset: Option<String>,
 }
 
 pub fn load_config() -> Config {
-    let default = Config { ctx_strategy: CtxStrategy::Dynamic, disabled_neurons: Default::default(), gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2], ctx_pow2: true, keep_alive: false, warmup: true };
+    let default = Config {
+        ctx_strategy: CtxStrategy::Dynamic, disabled_neurons: Default::default(),
+        gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2],
+        ctx_pow2: true, keep_alive: false, warmup: true,
+        neuron_mode: NeuronMode::Manual, neuron_presets: Vec::new(), active_preset: None,
+    };
     let path = match config_path() { Some(p) => p, None => return default };
     let Ok(text) = std::fs::read_to_string(&path) else { return default };
     let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else { return default };
     let ctx_strategy = val.get("ctx_strategy")
-        .and_then(|v| v.as_str())
-        .map(CtxStrategy::from_str)
-        .unwrap_or(CtxStrategy::Dynamic);
+        .and_then(|v| v.as_str()).map(CtxStrategy::from_str).unwrap_or(CtxStrategy::Dynamic);
     let disabled_neurons = val.get("disabled_neurons")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
@@ -81,26 +105,23 @@ pub fn load_config() -> Config {
     let ctx_pow2   = val.get("ctx_pow2").and_then(|v| v.as_bool()).unwrap_or(true);
     let keep_alive = val.get("keep_alive").and_then(|v| v.as_bool()).unwrap_or(false);
     let warmup     = val.get("warmup").and_then(|v| v.as_bool()).unwrap_or(true);
-    Config { ctx_strategy, disabled_neurons, gen_params, ctx_pow2, keep_alive, warmup }
+    let neuron_mode = val.get("neuron_mode").and_then(|v| v.as_str())
+        .map(NeuronMode::from_str).unwrap_or(NeuronMode::Manual);
+    let neuron_presets = val.get("neuron_presets").and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|p| {
+            let name    = p.get("name")?.as_str()?.to_string();
+            let enabled = p.get("enabled")?.as_array()?
+                .iter().filter_map(|v| v.as_str().map(String::from)).collect();
+            Some(NeuronPreset { name, enabled })
+        }).collect())
+        .unwrap_or_default();
+    let active_preset = val.get("active_preset").and_then(|v| v.as_str()).map(String::from);
+    Config { ctx_strategy, disabled_neurons, gen_params, ctx_pow2, keep_alive, warmup, neuron_mode, neuron_presets, active_preset }
 }
 
-pub fn save_config(strategy: &CtxStrategy, disabled_neurons: &std::collections::HashSet<String>, gen_params: &[f64; 3], ctx_pow2: bool, keep_alive: bool, warmup: bool) {
-    let Some(path) = config_path() else { return };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let names: Vec<&str> = disabled_neurons.iter().map(String::as_str).collect();
-    let json = serde_json::json!({
-        "ctx_strategy": strategy.as_str(),
-        "disabled_neurons": names,
-        "temperature": gen_params[0],
-        "top_p": gen_params[1],
-        "repeat_penalty": gen_params[2],
-        "ctx_pow2": ctx_pow2,
-        "keep_alive": keep_alive,
-        "warmup": warmup,
-    });
-    let _ = std::fs::write(&path, json.to_string());
+/// Returns true if the neuron has active tool capabilities (shell passthrough or synapse tools).
+pub fn neuron_is_tooling(n: &crate::synapse::Neuron) -> bool {
+    n.shell || !n.synapses.is_empty()
 }
 
 pub fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -244,7 +265,13 @@ pub struct App {
     pub ctx_strategy: CtxStrategy,
     pub config_cursor: usize,   // cursor in ctx strategy section
     pub config_section: usize,  // 0 = ctx strategy, 1 = neurons, 2 = generation, 3 = performance
-    pub neuron_cursor: usize,   // cursor in neurons section
+    pub neuron_cursor: usize,
+    pub neuron_mode: NeuronMode,
+    pub neuron_sub_section: usize,        // 0=Manual 1=Smart 2=Presets within neurons tab
+    pub neuron_presets: Vec<NeuronPreset>,
+    pub active_preset: Option<String>,
+    pub preset_cursor: usize,
+    pub preset_name_input: Option<String>, // Some(s) while creating a new preset
     pub disabled_neurons: std::collections::HashSet<String>,
     pub ctx_pow2: bool,
     pub keep_alive: bool,
@@ -278,7 +305,6 @@ pub struct App {
     pub completion: Option<Completion>,
     // neurons (groups of synapses)
     pub neurons: Vec<crate::synapse::Neuron>,
-    pub tool_context: String,
     // prompt templates (name, body) loaded from .cognilite/templates/ and global dir
     pub templates: Vec<(String, String)>,
     // input history
@@ -326,6 +352,12 @@ impl App {
             config_cursor,
             config_section: 0,
             neuron_cursor: 0,
+            neuron_mode: cfg.neuron_mode,
+            neuron_sub_section: 0,
+            neuron_presets: cfg.neuron_presets,
+            active_preset: cfg.active_preset,
+            preset_cursor: 0,
+            preset_name_input: None,
             disabled_neurons: cfg.disabled_neurons,
             ctx_pow2: cfg.ctx_pow2,
             keep_alive: cfg.keep_alive,
@@ -368,7 +400,6 @@ impl App {
                 }
                 n
             },
-            tool_context: String::new(), // built after synapses are loaded, in select_model
             templates: {
                 let mut t = Vec::new();
                 let local = std::env::current_dir()
@@ -415,9 +446,32 @@ impl App {
         });
     }
 
+    fn save_config(&self) {
+        let Some(path) = config_path() else { return };
+        if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+        let disabled: Vec<&str> = self.disabled_neurons.iter().map(String::as_str).collect();
+        let presets: Vec<serde_json::Value> = self.neuron_presets.iter().map(|p| {
+            serde_json::json!({ "name": p.name, "enabled": p.enabled })
+        }).collect();
+        let json = serde_json::json!({
+            "ctx_strategy":    self.ctx_strategy.as_str(),
+            "disabled_neurons": disabled,
+            "temperature":     self.gen_params[0],
+            "top_p":           self.gen_params[1],
+            "repeat_penalty":  self.gen_params[2],
+            "ctx_pow2":        self.ctx_pow2,
+            "keep_alive":      self.keep_alive,
+            "warmup":          self.warmup,
+            "neuron_mode":     self.neuron_mode.as_str(),
+            "neuron_presets":  presets,
+            "active_preset":   self.active_preset,
+        });
+        let _ = std::fs::write(&path, json.to_string());
+    }
+
     pub fn confirm_config(&mut self) {
         self.ctx_strategy = CtxStrategy::from_index(self.config_cursor);
-        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive, self.warmup);
+        self.save_config();
     }
 
     pub fn toggle_perf(&mut self, index: usize) {
@@ -427,7 +481,7 @@ impl App {
             2 => self.warmup     = !self.warmup,
             _ => {}
         }
-        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive, self.warmup);
+        self.save_config();
     }
 
     pub fn toggle_neuron(&mut self) {
@@ -438,7 +492,7 @@ impl App {
             } else {
                 self.disabled_neurons.insert(name);
             }
-            save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive, self.warmup);
+            self.save_config();
         }
     }
 
@@ -447,12 +501,53 @@ impl App {
         let v = &mut self.gen_params[self.param_cursor];
         *v = (*v + direction * step).clamp(min, max);
         *v = (*v * 100.0).round() / 100.0;
-        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive, self.warmup);
+        self.save_config();
     }
 
     pub fn param_reset(&mut self) {
         self.gen_params[self.param_cursor] = GEN_PARAMS[self.param_cursor].2;
-        save_config(&self.ctx_strategy, &self.disabled_neurons, &self.gen_params, self.ctx_pow2, self.keep_alive, self.warmup);
+        self.save_config();
+    }
+
+    pub fn set_neuron_mode(&mut self, mode: NeuronMode) {
+        self.neuron_mode = mode;
+        self.save_config();
+        self.warmup_last_hash = None;
+        self.trigger_warmup();
+    }
+
+    pub fn apply_preset(&mut self, name: &str) {
+        if self.active_preset.as_deref() == Some(name) {
+            self.active_preset = None;
+        } else {
+            self.active_preset = Some(name.to_string());
+        }
+        self.save_config();
+        self.warmup_last_hash = None;
+        self.trigger_warmup();
+    }
+
+    pub fn save_current_as_preset(&mut self, name: String) {
+        let enabled: Vec<String> = self.neurons.iter()
+            .filter(|n| !self.disabled_neurons.contains(&n.name))
+            .map(|n| n.name.clone())
+            .collect();
+        if let Some(p) = self.neuron_presets.iter_mut().find(|p| p.name == name) {
+            p.enabled = enabled;
+        } else {
+            self.neuron_presets.push(NeuronPreset { name, enabled });
+        }
+        self.save_config();
+    }
+
+    pub fn delete_preset(&mut self) {
+        if self.neuron_presets.is_empty() { return; }
+        let idx = self.preset_cursor.min(self.neuron_presets.len() - 1);
+        let name = self.neuron_presets[idx].name.clone();
+        self.neuron_presets.remove(idx);
+        if self.active_preset.as_deref() == Some(&name) { self.active_preset = None; }
+        self.preset_cursor = self.preset_cursor.min(self.neuron_presets.len().saturating_sub(1));
+        self.save_config();
     }
 
     pub fn toggle_config(&mut self) {
@@ -474,10 +569,6 @@ impl App {
             self.selected_model = Some(name.clone());
             self.warmup_last_hash = None;
             self.context_length = crate::ollama::fetch_context_length(&self.base_url, &name);
-            let enabled: Vec<&crate::synapse::Neuron> = self.neurons.iter()
-                .filter(|n| !self.disabled_neurons.contains(&n.name))
-                .collect();
-            self.tool_context = crate::synapse::build_tool_context(&enabled);
             self.used_tokens = 0;
             self.messages.clear();
             self.input.clear();
@@ -960,10 +1051,46 @@ impl App {
 
     // --- pinned files ---
 
+    pub fn effective_enabled_neurons(&self) -> Vec<&crate::synapse::Neuron> {
+        match self.neuron_mode {
+            NeuronMode::Presets => {
+                if let Some(ref pname) = self.active_preset {
+                    if let Some(preset) = self.neuron_presets.iter().find(|p| &p.name == pname) {
+                        return self.neurons.iter()
+                            .filter(|n| preset.enabled.contains(&n.name))
+                            .collect();
+                    }
+                }
+                self.neurons.iter().filter(|n| !self.disabled_neurons.contains(&n.name)).collect()
+            }
+            _ => self.neurons.iter().filter(|n| !self.disabled_neurons.contains(&n.name)).collect(),
+        }
+    }
+
     fn full_system_prompt(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
-        if !self.tool_context.is_empty() {
-            parts.push(self.tool_context.clone());
+        let enabled = self.effective_enabled_neurons();
+        match self.neuron_mode {
+            NeuronMode::Smart => {
+                let reasoning: Vec<&crate::synapse::Neuron> = enabled.iter()
+                    .filter(|n| !neuron_is_tooling(n)).copied().collect();
+                let tooling: Vec<&crate::synapse::Neuron> = enabled.iter()
+                    .filter(|n| neuron_is_tooling(n)).copied().collect();
+                let ctx = crate::synapse::build_tool_context(&reasoning);
+                if !ctx.is_empty() { parts.push(ctx); }
+                if !tooling.is_empty() {
+                    let mut manifest = "## On-demand neurons\nNot currently loaded. Request one with `<load_neuron>Name</load_neuron>` when you need it:\n".to_string();
+                    for n in &tooling {
+                        let desc = if n.description.is_empty() { String::new() } else { format!(" — {}", n.description) };
+                        manifest.push_str(&format!("- **{}**{}\n", n.name, desc));
+                    }
+                    parts.push(manifest);
+                }
+            }
+            _ => {
+                let ctx = crate::synapse::build_tool_context(&enabled);
+                if !ctx.is_empty() { parts.push(ctx); }
+            }
         }
         if !self.pinned_files.is_empty() {
             let mut section = "## Pinned files\n\nThese files are always in context:".to_string();

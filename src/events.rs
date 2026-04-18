@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use crate::app::{App, AskKind, ChatFocus, Screen, StreamState, fuzzy_match};
+use crate::app::{App, AskKind, ChatFocus, NeuronMode, Screen, StreamState, fuzzy_match};
 
 fn nav_prev(cursor: &mut usize, filtered: &[usize]) {
     if let Some(pos) = filtered.iter().position(|&i| i == *cursor) {
@@ -103,23 +103,95 @@ fn handle_config(app: &mut App, key: KeyEvent) {
             _ => {}
         }
     } else if app.config_section == 1 {
-        let filtered: Vec<usize> = app.neurons.iter().enumerate()
-            .filter(|(_, n)| fuzzy_match(&app.config_search, &n.name))
-            .map(|(i, _)| i)
-            .collect();
+        // Preset name input captures all keys
+        if app.preset_name_input.is_some() {
+            match key.code {
+                KeyCode::Enter => {
+                    let name = app.preset_name_input.take().unwrap_or_default();
+                    if !name.trim().is_empty() {
+                        app.save_current_as_preset(name.trim().to_string());
+                    }
+                }
+                KeyCode::Esc => { app.preset_name_input = None; }
+                KeyCode::Backspace => { if let Some(ref mut s) = app.preset_name_input { s.pop(); } }
+                KeyCode::Char(c) => { if let Some(ref mut s) = app.preset_name_input { s.push(c); } }
+                _ => {}
+            }
+            return;
+        }
+
         match key.code {
-            KeyCode::Up   => nav_prev(&mut app.neuron_cursor, &filtered),
-            KeyCode::Down => nav_next(&mut app.neuron_cursor, &filtered),
-            KeyCode::Enter | KeyCode::Char(' ') => app.toggle_neuron(),
-            KeyCode::Backspace => { app.config_search.pop(); }
-            KeyCode::Char(c) => {
-                app.config_search.push(c);
-                let new_filtered: Vec<usize> = app.neurons.iter().enumerate()
+            KeyCode::Left  => { app.neuron_sub_section = app.neuron_sub_section.saturating_sub(1); }
+            KeyCode::Right => { app.neuron_sub_section = (app.neuron_sub_section + 1).min(2); }
+            _ => {}
+        }
+
+        match app.neuron_sub_section {
+            0 => {
+                // Manual
+                let filtered: Vec<usize> = app.neurons.iter().enumerate()
                     .filter(|(_, n)| fuzzy_match(&app.config_search, &n.name))
                     .map(|(i, _)| i).collect();
-                snap_cursor(&mut app.neuron_cursor, &new_filtered);
+                match key.code {
+                    KeyCode::Up   => nav_prev(&mut app.neuron_cursor, &filtered),
+                    KeyCode::Down => nav_next(&mut app.neuron_cursor, &filtered),
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        app.toggle_neuron();
+                        if app.neuron_mode != NeuronMode::Manual {
+                            app.set_neuron_mode(NeuronMode::Manual);
+                        } else {
+                            app.warmup_last_hash = None;
+                            app.trigger_warmup();
+                        }
+                    }
+                    KeyCode::Backspace => { app.config_search.pop(); }
+                    KeyCode::Char(c) => {
+                        app.config_search.push(c);
+                        let new_filtered: Vec<usize> = app.neurons.iter().enumerate()
+                            .filter(|(_, n)| fuzzy_match(&app.config_search, &n.name))
+                            .map(|(i, _)| i).collect();
+                        snap_cursor(&mut app.neuron_cursor, &new_filtered);
+                    }
+                    _ => {}
+                }
+                // Switching to Manual sub-section activates Manual mode
+                if key.code == KeyCode::Left || key.code == KeyCode::Right {
+                    app.set_neuron_mode(NeuronMode::Manual);
+                }
             }
-            _ => {}
+            1 => {
+                // Smart — read-only display; switching here activates Smart mode
+                if key.code == KeyCode::Left || key.code == KeyCode::Right {
+                    app.set_neuron_mode(NeuronMode::Smart);
+                }
+            }
+            _ => {
+                // Presets
+                if key.code == KeyCode::Left || key.code == KeyCode::Right {
+                    app.set_neuron_mode(NeuronMode::Presets);
+                }
+                let preset_count = app.neuron_presets.len();
+                match key.code {
+                    KeyCode::Up => {
+                        if app.preset_cursor > 0 { app.preset_cursor -= 1; }
+                    }
+                    KeyCode::Down => {
+                        app.preset_cursor = (app.preset_cursor + 1).min(preset_count);
+                    }
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        if app.preset_cursor == preset_count {
+                            // "+ New" entry
+                            app.preset_name_input = Some(String::new());
+                        } else if let Some(preset) = app.neuron_presets.get(app.preset_cursor) {
+                            let name = preset.name.clone();
+                            app.apply_preset(&name);
+                        }
+                    }
+                    KeyCode::Char('n') => { app.preset_name_input = Some(String::new()); }
+                    KeyCode::Char('d') | KeyCode::Delete => { app.delete_preset(); }
+                    _ => {}
+                }
+            }
         }
     } else if app.config_section == 2 {
         let filtered: Vec<usize> = crate::app::GEN_PARAMS.iter().enumerate()

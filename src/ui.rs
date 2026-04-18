@@ -170,25 +170,149 @@ fn draw_config(frame: &mut Frame, app: &App) {
         }
         1 => {
             // ── Neurons ───────────────────────────────────────────────────────
-            let filtered: Vec<(usize, &crate::synapse::Neuron)> = app.neurons.iter().enumerate()
-                .filter(|(_, n)| crate::app::fuzzy_match(&app.config_search, &n.name))
-                .collect();
-            for (row, (orig_idx, neuron)) in filtered.iter().enumerate() {
-                let cursor  = *orig_idx == app.neuron_cursor;
-                let enabled = !app.disabled_neurons.contains(&neuron.name);
-                let (marker, circle_fg) = if enabled { ("●", ACCENT) } else { ("○", DIM) };
-                let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
-                let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
-                let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
-                let desc = if neuron.description.is_empty() { String::new() } else { format!("  —  {}", neuron.description) };
-                let tok = (neuron.system_prompt.len() / 4) as u64;
-                let tok_str = format!("  ~{tok}tok");
-                frame.render_widget(Paragraph::new(Line::from(vec![
-                    Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
-                    Span::styled(&neuron.name, name_style),
-                    Span::styled(desc, desc_style),
-                    Span::styled(tok_str, bg.patch(Style::default().fg(THINKING_COLOR))),
-                ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
+            use crate::app::neuron_is_tooling;
+
+            // Sub-tab bar: Manual · Smart · Presets
+            let sub_tabs = ["Manual", "Smart", "Presets"];
+            let mut sub_spans: Vec<Span> = Vec::new();
+            for (i, name) in sub_tabs.iter().enumerate() {
+                if i > 0 { sub_spans.push(Span::styled("  ·  ", Style::default().fg(DIM))); }
+                if i == app.neuron_sub_section {
+                    sub_spans.push(Span::styled(*name, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)));
+                } else {
+                    sub_spans.push(Span::styled(*name, Style::default().fg(DIM)));
+                }
+            }
+            frame.render_widget(
+                Paragraph::new(Line::from(sub_spans)).alignment(ratatui::layout::Alignment::Center),
+                Rect { x: inner.x, y: items_y, width: inner.width, height: 1 },
+            );
+
+            let content_y = items_y + 2;
+
+            match app.neuron_sub_section {
+                0 => {
+                    // Manual — current neuron toggle list
+                    let filtered: Vec<(usize, &crate::synapse::Neuron)> = app.neurons.iter().enumerate()
+                        .filter(|(_, n)| crate::app::fuzzy_match(&app.config_search, &n.name))
+                        .collect();
+                    for (row, (orig_idx, neuron)) in filtered.iter().enumerate() {
+                        let cursor  = *orig_idx == app.neuron_cursor;
+                        let enabled = !app.disabled_neurons.contains(&neuron.name);
+                        let (marker, circle_fg) = if enabled { ("●", ACCENT) } else { ("○", DIM) };
+                        let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+                        let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
+                        let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+                        let desc = if neuron.description.is_empty() { String::new() } else { format!("  —  {}", neuron.description) };
+                        let tok = (neuron.system_prompt.len() / 4) as u64;
+                        frame.render_widget(Paragraph::new(Line::from(vec![
+                            Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
+                            Span::styled(&neuron.name, name_style),
+                            Span::styled(desc, desc_style),
+                            Span::styled(format!("  ~{tok}tok"), bg.patch(Style::default().fg(THINKING_COLOR))),
+                        ])), Rect { x: inner.x, y: content_y + row as u16, width: inner.width, height: 1 });
+                    }
+                }
+                1 => {
+                    // Smart — reasoning always active, tooling on demand
+                    let mut y = content_y;
+                    let reasoning: Vec<_> = app.neurons.iter()
+                        .filter(|n| !neuron_is_tooling(n) && !app.disabled_neurons.contains(&n.name))
+                        .collect();
+                    let tooling: Vec<_> = app.neurons.iter()
+                        .filter(|n| neuron_is_tooling(n) && !app.disabled_neurons.contains(&n.name))
+                        .collect();
+
+                    frame.render_widget(Paragraph::new(Line::from(Span::styled(
+                        "  Always active (reasoning)", Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                    ))), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                    y += 1;
+                    for n in &reasoning {
+                        let tok = (n.system_prompt.len() / 4) as u64;
+                        let desc = if n.description.is_empty() { String::new() } else { format!("  —  {}", n.description) };
+                        frame.render_widget(Paragraph::new(Line::from(vec![
+                            Span::styled("  ● ", Style::default().fg(ACCENT)),
+                            Span::styled(&n.name, Style::default().fg(Color::White)),
+                            Span::styled(desc, Style::default().fg(DIM)),
+                            Span::styled(format!("  ~{tok}tok"), Style::default().fg(THINKING_COLOR)),
+                        ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                        y += 1;
+                    }
+                    if reasoning.is_empty() {
+                        frame.render_widget(Paragraph::new(Line::from(
+                            Span::styled("  (none)", Style::default().fg(DIM))
+                        )), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                        y += 1;
+                    }
+                    y += 1;
+                    frame.render_widget(Paragraph::new(Line::from(Span::styled(
+                        "  On demand (tooling)", Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                    ))), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                    y += 1;
+                    for n in &tooling {
+                        let tok = (n.system_prompt.len() / 4) as u64;
+                        let desc = if n.description.is_empty() { String::new() } else { format!("  —  {}", n.description) };
+                        frame.render_widget(Paragraph::new(Line::from(vec![
+                            Span::styled("  ◈ ", Style::default().fg(THINKING_COLOR)),
+                            Span::styled(&n.name, Style::default().fg(Color::White)),
+                            Span::styled(desc, Style::default().fg(DIM)),
+                            Span::styled(format!("  ~{tok}tok"), Style::default().fg(THINKING_COLOR)),
+                        ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                        y += 1;
+                    }
+                    if tooling.is_empty() {
+                        frame.render_widget(Paragraph::new(Line::from(
+                            Span::styled("  (none)", Style::default().fg(DIM))
+                        )), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                    }
+                }
+                _ => {
+                    // Presets
+                    let mut y = content_y;
+
+                    // Name input when creating
+                    if let Some(ref draft) = app.preset_name_input {
+                        frame.render_widget(Paragraph::new(Line::from(vec![
+                            Span::styled("  New preset name: ", Style::default().fg(DIM)),
+                            Span::styled(draft.as_str(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                            Span::styled("_", Style::default().fg(ACCENT)),
+                        ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                        return;
+                    }
+
+                    // "+ New" entry
+                    let new_cursor = app.preset_cursor == 0 && app.neuron_presets.is_empty()
+                        || app.preset_cursor >= app.neuron_presets.len();
+                    let new_selected = app.preset_cursor == app.neuron_presets.len();
+                    let new_bg = if new_selected { Style::default().bg(SURFACE) } else { Style::default() };
+                    frame.render_widget(Paragraph::new(Line::from(vec![
+                        Span::styled("  + ", new_bg.patch(Style::default().fg(ACCENT))),
+                        Span::styled("New preset from current selection", new_bg.patch(Style::default().fg(if new_selected { Color::White } else { DIM }))),
+                    ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                    y += 2;
+
+                    for (i, preset) in app.neuron_presets.iter().enumerate() {
+                        let selected = i == app.preset_cursor;
+                        let active   = app.active_preset.as_deref() == Some(&preset.name);
+                        let (marker, marker_fg) = if active { ("●", ACCENT) } else { ("○", DIM) };
+                        let bg = if selected { Style::default().bg(SURFACE) } else { Style::default() };
+                        let summary = preset.enabled.join(" · ");
+                        let summary_str = if summary.is_empty() { "(empty)".to_string() } else { summary };
+                        frame.render_widget(Paragraph::new(Line::from(vec![
+                            Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(marker_fg))),
+                            Span::styled(&preset.name, bg.patch(Style::default().fg(Color::White).add_modifier(if selected { Modifier::BOLD } else { Modifier::empty() }))),
+                            Span::styled(format!("   {summary_str}"), bg.patch(Style::default().fg(DIM))),
+                        ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                        y += 1;
+                    }
+
+                    if app.neuron_presets.is_empty() {
+                        frame.render_widget(Paragraph::new(Line::from(
+                            Span::styled("  No presets yet. Press Enter on '+ New' to create one.", Style::default().fg(DIM))
+                        )), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                    }
+                    let _ = new_cursor;
+                }
             }
         }
         2 => {

@@ -42,7 +42,7 @@ impl CtxStrategy {
     fn as_str(&self) -> &'static str {
         match self { CtxStrategy::Dynamic => "dynamic", CtxStrategy::Full => "full" }
     }
-    fn from_str(s: &str) -> Self {
+    pub fn from_str(s: &str) -> Self {
         match s { "full" => CtxStrategy::Full, _ => CtxStrategy::Dynamic }
     }
 }
@@ -338,6 +338,8 @@ pub struct App {
     pub file_panel_attachment: Option<(usize, usize)>, // (msg_idx, att_idx)
     // highlight cache: path → (mtime, highlighted lines)
     pub highlight_cache: HashMap<PathBuf, (std::time::SystemTime, Vec<Line<'static>>)>,
+    // neurons injected on-demand in the current conversation (Smart mode)
+    pub injected_neurons: std::collections::HashSet<String>,
 }
 
 impl App {
@@ -434,6 +436,7 @@ impl App {
             file_panel_visible: true,
             file_panel_attachment: None,
             highlight_cache: HashMap::new(),
+            injected_neurons: std::collections::HashSet::new(),
         }
     }
 
@@ -638,7 +641,7 @@ impl App {
 
     /// Pushes an empty assistant placeholder and starts the Ollama stream
     /// from the current message history.
-    fn start_stream(&mut self) {
+    pub fn start_stream(&mut self) {
         self.messages.push(Message {
             role: Role::Assistant,
             content: String::new(),
@@ -857,6 +860,59 @@ impl App {
                             }
                             self.current_mood = Some(emoji);
                         }
+                        // detect <load_neuron>Name</load_neuron> — inject neuron and restart stream
+                        let load_name: Option<String> = if let Some(last) = self.messages.last() {
+                            if last.role == Role::Assistant { extract_load_neuron_tag(&last.content) } else { None }
+                        } else { None };
+                        if let Some(name) = load_name {
+                            if !self.injected_neurons.contains(&name) {
+                                let neuron_content = self.neurons.iter()
+                                    .find(|n| n.name.eq_ignore_ascii_case(&name))
+                                    .map(|n| format!("## Neuron: {}\n\n{}", n.name, n.system_prompt));
+                                if let Some(content) = neuron_content {
+                                    // strip <load_neuron> tag from display only
+                                    if let Some(last) = self.messages.last_mut() {
+                                        let scan_from = last.content.rfind("</think>").map(|i| i + 8).unwrap_or(0);
+                                        if let Some(p) = last.content[scan_from..].find("<load_neuron>") {
+                                            let abs = scan_from + p;
+                                            if let Some(end) = last.content[abs..].find("</load_neuron>") {
+                                                let tag_end = abs + end + 14;
+                                                let before = last.content[..abs].trim_end().to_string();
+                                                let after = last.content[tag_end..].to_string();
+                                                last.content = before + &after;
+                                            }
+                                        }
+                                        last.thinking_secs = self.thinking_end_secs
+                                            .or_else(|| self.stream_started_at.map(|t| t.elapsed().as_secs_f64()));
+                                    }
+                                    self.injected_neurons.insert(name.clone());
+                                    let label = format!("Neuron \u{203a} {}", name);
+                                    let size = content.len();
+                                    self.messages.push(Message {
+                                        role: Role::Tool,
+                                        content: content.clone(),
+                                        llm_content: format!("Neuron loaded:\n{content}"),
+                                        images: vec![],
+                                        attachments: vec![Attachment {
+                                            filename: name,
+                                            path: PathBuf::new(),
+                                            kind: AttachmentKind::Text,
+                                            size,
+                                        }],
+                                        thinking: String::new(),
+                                        thinking_secs: None,
+                                        stats: None,
+                                        tool_call: Some(label),
+                                    });
+                                    self.stream_state = StreamState::Idle;
+                                    self.stream_started_at = None;
+                                    self.thinking_end_secs = None;
+                                    self.auto_scroll = true;
+                                    self.start_stream();
+                                    return;
+                                }
+                            }
+                        }
                     }
                     if chunk.done {
                         // attach token stats
@@ -1047,6 +1103,7 @@ impl App {
         self.ask_cursor = 0;
         self.current_mood = None;
         self.pending_patch = None;
+        self.injected_neurons.clear();
     }
 
     // --- pinned files ---
@@ -1463,7 +1520,7 @@ impl App {
 
     // --- synapse execution ---
 
-    fn handle_tool_call(&mut self, call: &str) {
+    pub fn handle_tool_call(&mut self, call: &str) {
         let call = call.trim();
         let (cmd, args) = call.split_once(' ').unwrap_or((call, ""));
         let args = args.trim().trim_start_matches('@');
@@ -1877,7 +1934,7 @@ impl App {
 
 /// Returns the content between `<tool>` and `</tool>` if both tags are present,
 /// ignoring anything inside `<think>...</think>` blocks (model reasoning).
-fn extract_tool_call(content: &str) -> Option<&str> {
+pub fn extract_tool_call(content: &str) -> Option<&str> {
     // if a <think> block is open but not yet closed, we're still inside reasoning — skip
     let scan = match content.rfind("</think>") {
         Some(i) => &content[i + 8..],  // only look after the closing think tag
@@ -2316,7 +2373,7 @@ pub fn extract_ask_tag(content: &str) -> Option<(AskKind, String)> {
 }
 
 /// Detects a complete `<patch>...</patch>` tag outside think blocks. Returns the raw diff content.
-fn extract_patch_tag(content: &str) -> Option<String> {
+pub fn extract_patch_tag(content: &str) -> Option<String> {
     let scan = match content.rfind("</think>") {
         Some(i) => &content[i + 8..],
         None => {
@@ -2361,7 +2418,7 @@ fn apply_patch(diff: &str, working_dir: &std::path::Path) -> String {
 }
 
 /// Detects a complete `<mood>...</mood>` tag outside think blocks. Returns the emoji string.
-fn extract_mood_tag(content: &str) -> Option<String> {
+pub fn extract_mood_tag(content: &str) -> Option<String> {
     let scan = match content.rfind("</think>") {
         Some(i) => &content[i + 8..],
         None => {
@@ -2371,6 +2428,19 @@ fn extract_mood_tag(content: &str) -> Option<String> {
     };
     let start = scan.find("<mood>")? + 6;
     let end   = scan.find("</mood>")?;
+    if end >= start { Some(scan[start..end].trim().to_string()) } else { None }
+}
+
+pub fn extract_load_neuron_tag(content: &str) -> Option<String> {
+    let scan = match content.rfind("</think>") {
+        Some(i) => &content[i + 8..],
+        None => {
+            if content.contains("<think>") { return None; }
+            content
+        }
+    };
+    let start = scan.find("<load_neuron>")? + 13;
+    let end   = scan.find("</load_neuron>")?;
     if end >= start { Some(scan[start..end].trim().to_string()) } else { None }
 }
 

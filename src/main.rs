@@ -42,6 +42,7 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> color_eyr
     loop {
         app.poll_warmup();
         app.poll_stream();
+        app.check_pinned_files();
         terminal.draw(|frame| ui::draw(frame, app))?;
 
         let timeout = if app.stream_state == app::StreamState::Streaming {

@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
-use crate::app::{App, AskKind, ChatFocus, CtxStrategy, Role, Screen, StreamState};
+use crate::app::{App, AskKind, ChatFocus, CompletionKind, CtxStrategy, Role, Screen, StreamState};
 
 const ACCENT: Color = Color::Rgb(137, 180, 250);  // blue
 const USER_COLOR: Color = Color::Rgb(166, 227, 161); // green
@@ -430,17 +430,26 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             AskKind::Choice(opts) => (opts.len().min(8) as u16 + 2,       true),
         }
     };
+    let pinned_height = if app.pinned_files.is_empty() { 0u16 } else { 1 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),                                         // [0] header
-            Constraint::Fill(1),                                           // [1] messages
-            Constraint::Length(if warming_up { 1 } else { 0 }),           // [2] warmup
-            Constraint::Length(ask_height),                                // [3] ask widget
-            Constraint::Length(if hide_input { 0 } else { input_height }), // [4] input
-            Constraint::Length(1),                                         // [5] hints
+            Constraint::Length(1),                                          // [0] header
+            Constraint::Length(pinned_height),                              // [1] pinned bar
+            Constraint::Fill(1),                                            // [2] messages
+            Constraint::Length(if warming_up { 1 } else { 0 }),            // [3] warmup
+            Constraint::Length(ask_height),                                 // [4] ask widget
+            Constraint::Length(if hide_input { 0 } else { input_height }), // [5] input
+            Constraint::Length(1),                                          // [6] hints
         ])
         .split(area);
+    let header_area  = chunks[0];
+    let pinned_area  = chunks[1];
+    let msg_area_    = chunks[2];
+    let warmup_area  = chunks[3];
+    let ask_area     = chunks[4];
+    let input_area   = chunks[5];
+    let hints_area   = chunks[6];
 
     // --- header ---
     let model_name = app.selected_model.as_deref().unwrap_or("unknown");
@@ -480,6 +489,10 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         }
     }
 
+    if let Some(mood) = &app.current_mood {
+        header_spans.push(Span::styled(format!("  {mood}"), Style::default()));
+    }
+
     if let Some(t) = app.copy_notice {
         if t.elapsed().as_secs_f64() < 2.0 {
             header_spans.push(Span::styled("  ✓ copied", Style::default().fg(USER_COLOR)));
@@ -487,10 +500,27 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             app.copy_notice = None;
         }
     }
-    frame.render_widget(Paragraph::new(Line::from(header_spans)), chunks[0]);
+    frame.render_widget(Paragraph::new(Line::from(header_spans)), header_area);
+
+    // --- pinned files bar ---
+    if !app.pinned_files.is_empty() {
+        let mut spans = vec![Span::styled("  📎 ", Style::default().fg(DIM))];
+        for pf in &app.pinned_files {
+            let name = pf.display.split('/').last().unwrap_or(&pf.display);
+            if pf.changed {
+                spans.push(Span::styled(format!("{name} "), Style::default().fg(ASSISTANT_COLOR)));
+                spans.push(Span::styled("⟳  ", Style::default().fg(Color::Rgb(249, 226, 175))));
+            } else {
+                spans.push(Span::styled(format!("{name} "), Style::default().fg(DIM)));
+                spans.push(Span::styled("✓  ", Style::default().fg(USER_COLOR)));
+            }
+        }
+        spans.push(Span::styled("Ctrl+P", Style::default().fg(THINKING_COLOR)));
+        frame.render_widget(Paragraph::new(Line::from(spans)), pinned_area);
+    }
 
     // --- messages ---
-    let msg_area = chunks[1];
+    let msg_area = msg_area_;
     let inner_width = msg_area.width.saturating_sub(4) as usize; // borders + padding
     let history_mode = app.chat_focus == ChatFocus::History;
 
@@ -792,7 +822,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 Span::styled(format!("  {} ", SPINNER[frame_i]), Style::default().fg(ACCENT)),
                 Span::styled("warming up KV cache", Style::default().fg(DIM)),
                 Span::styled(format!("  {}", format_duration(elapsed)), Style::default().fg(THINKING_COLOR)),
-            ])), chunks[2]);
+            ])), warmup_area);
         }
     }
 
@@ -804,7 +834,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 frame.render_widget(Paragraph::new(Line::from(vec![
                     Span::styled("  ⬡  ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
                     Span::styled(ask.question.clone(), Style::default().fg(Color::White)),
-                ])).style(Style::default().bg(BG)), chunks[3]);
+                ])).style(Style::default().bg(BG)), ask_area);
             }
             AskKind::Choice(options) => {
                 let block = Block::default()
@@ -813,12 +843,12 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                     .border_style(Style::default().fg(ACCENT))
                     .style(Style::default().bg(BG));
                 let inner = Rect {
-                    x: chunks[3].x + 1,
-                    y: chunks[3].y + 1,
-                    width: chunks[3].width.saturating_sub(2),
-                    height: chunks[3].height.saturating_sub(2),
+                    x: ask_area.x + 1,
+                    y: ask_area.y + 1,
+                    width: ask_area.width.saturating_sub(2),
+                    height: ask_area.height.saturating_sub(2),
                 };
-                frame.render_widget(block, chunks[3]);
+                frame.render_widget(block, ask_area);
                 for (i, opt) in options.iter().enumerate().take(8) {
                     let selected = i == app.ask_cursor;
                     let (marker, opt_style) = if selected {
@@ -836,7 +866,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    frame.render_widget(input_widget, chunks[4]);
+    frame.render_widget(input_widget, input_area);
 
     // place cursor in 2D using visual coordinates
     let show_cursor = app.stream_state != StreamState::Streaming
@@ -847,15 +877,20 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         let visible_rows = (input_height - 2) as usize;
         let input_scroll = vcur_row.saturating_sub(visible_rows.saturating_sub(1));
         let visual_row = vcur_row - input_scroll;
-        let prefix_len: u16 = 2; // "> " or "  "
-        let x = chunks[4].x + 1 + prefix_len + vcur_col as u16;
-        let y = chunks[4].y + 1 + visual_row as u16;
-        frame.set_cursor_position((x.min(chunks[4].x + chunks[4].width - 2), y));
+        let prefix_len: u16 = 2;
+        let x = input_area.x + 1 + prefix_len + vcur_col as u16;
+        let y = input_area.y + 1 + visual_row as u16;
+        frame.set_cursor_position((x.min(input_area.x + input_area.width - 2), y));
     }
 
     // --- completion popup ---
     if app.completion.is_some() {
-        draw_completion_popup(frame, app, chunks[4]);
+        draw_completion_popup(frame, app, input_area);
+    }
+
+    // --- file picker popup ---
+    if app.file_picker.is_some() {
+        draw_file_picker(frame, app, msg_area);
     }
 
     // --- hints ---
@@ -888,7 +923,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         ])
     };
     let hints = Paragraph::new(hints_line).style(Style::default().fg(DIM));
-    frame.render_widget(hints, chunks[5]);
+    frame.render_widget(hints, hints_area);
 
     // --- help popup ---
     if app.show_help {
@@ -922,10 +957,100 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 ("Ctrl+Y",            "Copy selected block (history) / last response (input)"),
                 ("Ctrl+L",            "Clear conversation"),
                 ("@path",             "Attach a file or image"),
+                ("/template",         "Insert a prompt template"),
+                ("Ctrl+P",            "Pin files to context (always in system prompt)"),
                 ("Ctrl+C",            "Quit"),
             ]),
         ];
         draw_help_popup(frame, app, area, SECTIONS);
+    }
+}
+
+fn draw_file_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let fp = match &app.file_picker { Some(f) => f, None => return };
+    let candidates = app.file_picker_candidates();
+
+    const MAX_VISIBLE: usize = 12;
+    let total = candidates.len();
+    let visible = total.min(MAX_VISIBLE);
+
+    let popup_width  = (area.width * 2 / 3).max(40).min(area.width);
+    let popup_height = (visible as u16 + 5).min(area.height); // +5: border(2) + search(1) + sep(1) + hint(1)
+    let popup_x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+    let popup_rect = Rect { x: popup_x, y: popup_y, width: popup_width, height: popup_height };
+
+    frame.render_widget(Clear, popup_rect);
+    frame.render_widget(
+        Block::default()
+            .title(Span::styled(" 📎 pin files ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+            .title_bottom(Span::styled(" Enter pin/unpin · Esc close ", Style::default().fg(DIM)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .style(Style::default().bg(BG)),
+        popup_rect,
+    );
+
+    // search box
+    let search_area = Rect { x: popup_rect.x + 1, y: popup_rect.y + 1, width: popup_rect.width - 2, height: 1 };
+    let search_text = if fp.query.is_empty() {
+        Line::from(vec![
+            Span::styled("/ ", Style::default().fg(ACCENT)),
+            Span::styled("type to filter...", Style::default().fg(THINKING_COLOR)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("/ ", Style::default().fg(ACCENT)),
+            Span::styled(fp.query.clone(), Style::default().fg(Color::White)),
+        ])
+    };
+    frame.render_widget(Paragraph::new(search_text), search_area);
+
+    // file list
+    let scroll = if fp.cursor >= MAX_VISIBLE { fp.cursor + 1 - MAX_VISIBLE } else { 0 };
+    let list_area = Rect {
+        x: popup_rect.x + 1,
+        y: popup_rect.y + 2,
+        width: popup_rect.width - 2,
+        height: popup_rect.height.saturating_sub(4),
+    };
+
+    for (i, name) in candidates[scroll..scroll + visible].iter().enumerate() {
+        let global_idx = scroll + i;
+        let selected   = global_idx == fp.cursor;
+        let pinned     = app.pinned_files.iter().any(|pf| &pf.display == name);
+        let short      = name.split('/').last().unwrap_or(name);
+        let dir_part   = if name.contains('/') { &name[..name.rfind('/').unwrap()] } else { "" };
+
+        let row = Rect { x: list_area.x, y: list_area.y + i as u16, width: list_area.width, height: 1 };
+        let line = if selected {
+            Line::from(vec![
+                Span::styled(if pinned { " ● " } else { " ○ " }, Style::default().fg(BG).bg(ACCENT)),
+                Span::styled(format!("{short} "), Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(dir_part.to_string(), Style::default().fg(BG).bg(ACCENT)),
+            ])
+        } else if pinned {
+            Line::from(vec![
+                Span::styled(" ● ", Style::default().fg(USER_COLOR)),
+                Span::styled(short.to_string(), Style::default().fg(Color::White)),
+                Span::styled(format!("  {dir_part}"), Style::default().fg(THINKING_COLOR)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(" ○ ", Style::default().fg(DIM)),
+                Span::styled(short.to_string(), Style::default().fg(Color::White)),
+                Span::styled(format!("  {dir_part}"), Style::default().fg(THINKING_COLOR)),
+            ])
+        };
+        frame.render_widget(Paragraph::new(line), row);
+    }
+
+    if total == 0 {
+        frame.render_widget(
+            Paragraph::new(Span::styled("  no files found", Style::default().fg(DIM))),
+            Rect { x: list_area.x, y: list_area.y, width: list_area.width, height: 1 },
+        );
     }
 }
 
@@ -964,13 +1089,18 @@ fn draw_completion_popup(frame: &mut Frame, app: &App, input_area: Rect) {
         height: popup_height,
     };
 
+    let is_template = comp.kind == CompletionKind::Template;
     let items: Vec<ListItem> = comp.candidates[scroll..scroll + visible]
         .iter()
         .enumerate()
         .map(|(i, candidate)| {
             let global_idx = scroll + i;
-            let name = display_name(candidate);
-            let is_dir = candidate.ends_with('/');
+            let name = if is_template {
+                candidate.clone()
+            } else {
+                display_name(candidate)
+            };
+            let is_dir = !is_template && candidate.ends_with('/');
             let selected = global_idx == comp.cursor;
 
             if selected {
@@ -1004,8 +1134,10 @@ fn draw_completion_popup(frame: &mut Frame, app: &App, input_area: Rect) {
         String::new()
     };
 
+    let block_title = if is_template { " / templates " } else { "" };
     let block = Block::default()
-        .title(Span::styled(scroll_hint, Style::default().fg(DIM)))
+        .title(Span::styled(block_title, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+        .title_bottom(Span::styled(scroll_hint, Style::default().fg(DIM)))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACCENT))

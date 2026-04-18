@@ -213,6 +213,24 @@ fn handle_model_select(app: &mut App, key: KeyEvent) {
 fn handle_chat(app: &mut App, key: KeyEvent) {
     if handle_help_keys(app, key) { return; }
 
+    // File picker intercepts all keys when open
+    if app.file_picker.is_some() {
+        match key.code {
+            KeyCode::Esc => app.close_file_picker(),
+            KeyCode::Up => app.file_picker_prev(),
+            KeyCode::Down => app.file_picker_next(),
+            KeyCode::Enter => app.file_picker_accept(),
+            KeyCode::Backspace => {
+                if let Some(fp) = &mut app.file_picker { fp.query.pop(); fp.cursor = 0; }
+            }
+            KeyCode::Char(c) => {
+                if let Some(fp) = &mut app.file_picker { fp.query.push(c); fp.cursor = 0; }
+            }
+            _ => {}
+        }
+        return;
+    }
+
     // Ask mode intercepts all keys when awaiting user input
     if app.ask.is_some() {
         let (kind_tag, opts_len, selected) = {
@@ -318,6 +336,7 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
         KeyCode::Char('w') if ctrl => { app.input_delete_word_before(); app.update_completion(); }
         KeyCode::Char('y') if ctrl => app.copy_last_response(),
         KeyCode::Char('l') if ctrl => app.clear_chat(),
+        KeyCode::Char('p') if ctrl => app.open_file_picker(),
 
         // ── cursor movement ──────────────────────────────────────────────────
         KeyCode::Left  => { app.input_move_left();  app.update_completion(); }

@@ -114,6 +114,25 @@ impl Role {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompletionKind {
+    Path,
+    Template,
+}
+
+pub struct PinnedFile {
+    pub path: PathBuf,
+    pub display: String,          // relative path shown in UI
+    pub content: String,          // snapshot at last warmup / last send
+    pub mtime: Option<std::time::SystemTime>,
+    pub changed: bool,            // mtime differs from snapshot
+}
+
+pub struct FilePicker {
+    pub query: String,
+    pub cursor: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TokenStats {
     pub response_tokens: u64,
@@ -177,9 +196,10 @@ pub struct InputRequest {
 
 #[derive(Debug)]
 pub struct Completion {
-    pub candidates: Vec<String>, // completion strings (paths relative to working_dir or absolute)
+    pub candidates: Vec<String>, // completion strings (names for templates, paths for files)
     pub cursor: usize,           // selected index
-    pub token_start: usize,      // char position of the @ in input
+    pub token_start: usize,      // char position of the trigger char (@ or /) in input
+    pub kind: CompletionKind,
 }
 
 pub struct App {
@@ -223,6 +243,8 @@ pub struct App {
     // neurons (groups of synapses)
     pub neurons: Vec<crate::synapse::Neuron>,
     pub tool_context: String,
+    // prompt templates (name, body) loaded from .cognilite/templates/ and global dir
+    pub templates: Vec<(String, String)>,
     // input history
     pub input_history: Vec<String>,
     pub history_pos: Option<usize>,
@@ -241,6 +263,13 @@ pub struct App {
     // ask / user input requests
     pub ask: Option<InputRequest>,
     pub ask_cursor: usize, // selected index for Choice
+    // mood
+    pub current_mood: Option<String>,
+    // pending patch waiting for user confirmation
+    pub pending_patch: Option<String>,
+    // pinned files (always in system prompt)
+    pub pinned_files: Vec<PinnedFile>,
+    pub file_picker: Option<FilePicker>,
 }
 
 impl App {
@@ -296,6 +325,19 @@ impl App {
                 n
             },
             tool_context: String::new(), // built after synapses are loaded, in select_model
+            templates: {
+                let mut t = Vec::new();
+                let local = std::env::current_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                    .join(".cognilite/templates");
+                t.extend(load_templates(&local));
+                if let Ok(home) = std::env::var("HOME") {
+                    let global = std::path::PathBuf::from(home)
+                        .join(".config/cognilite/templates");
+                    t.extend(load_templates(&global));
+                }
+                t
+            },
             input_history: Vec::new(),
             history_pos: None,
             input_draft: String::new(),
@@ -309,6 +351,10 @@ impl App {
             history_cursor: 0,
             ask: None,
             ask_cursor: 0,
+            current_mood: None,
+            pending_patch: None,
+            pinned_files: Vec::new(),
+            file_picker: None,
         }
     }
 
@@ -385,28 +431,11 @@ impl App {
             self.history_cursor = 0;
             self.ask = None;
             self.ask_cursor = 0;
+            self.current_mood = None;
+            self.pending_patch = None;
             self.screen = Screen::Chat;
 
-            if self.warmup && !self.tool_context.is_empty() {
-                let num_ctx = match self.ctx_strategy {
-                    CtxStrategy::Full => self.context_length,
-                    CtxStrategy::Dynamic => self.context_length.map(|max| {
-                        let rounded = if self.ctx_pow2 { 8192u64.next_power_of_two() } else { 8192 };
-                        rounded.min(max)
-                    }),
-                };
-                let base_url     = self.base_url.clone();
-                let model        = name.clone();
-                let tool_context = self.tool_context.clone();
-                let keep_alive   = self.keep_alive;
-                let (tx, rx) = mpsc::channel();
-                self.warmup_rx = Some(rx);
-                self.warmup_started_at = Some(std::time::Instant::now());
-                std::thread::spawn(move || {
-                    crate::ollama::warmup(&base_url, model, tool_context, num_ctx, keep_alive);
-                    let _ = tx.send(());
-                });
-            }
+            self.trigger_warmup();
         }
     }
 
@@ -429,8 +458,14 @@ impl App {
         self.completion = None;
         self.chat_focus = ChatFocus::Input;
 
-        let (display, llm_content, attachments, images) =
+        let diff_note = self.collect_pinned_diffs();
+
+        let (display, mut llm_content, attachments, images) =
             resolve_attachments(&raw, &self.working_dir, self.context_length, self.used_tokens);
+
+        if !diff_note.is_empty() {
+            llm_content = format!("{diff_note}\n\n{llm_content}");
+        }
 
         self.messages.push(Message {
             role: Role::User,
@@ -473,12 +508,12 @@ impl App {
             }),
         };
 
-        // prepend tool context as a system message if we have tools
         let mut chat_messages: Vec<ChatMessage> = Vec::new();
-        if !self.tool_context.is_empty() {
+        let system = self.full_system_prompt();
+        if !system.is_empty() {
             chat_messages.push(ChatMessage {
                 role: "system".to_string(),
-                content: self.tool_context.clone(),
+                content: system,
                 thinking: None,
                 images: None,
             });
@@ -614,6 +649,60 @@ impl App {
                             self.ask_cursor = 0;
                             return;
                         }
+                        // detect <patch> tag — show diff, ask confirmation, stop stream
+                        let patch_content: Option<String> = if let Some(last) = self.messages.last() {
+                            if last.role == Role::Assistant { extract_patch_tag(&last.content) } else { None }
+                        } else { None };
+                        if let Some(diff) = patch_content {
+                            if let Some(last) = self.messages.last_mut() {
+                                let scan_from = last.content.rfind("</think>").map(|i| i + 8).unwrap_or(0);
+                                if let Some(p) = last.content[scan_from..].find("<patch>") {
+                                    let abs = scan_from + p;
+                                    if let Some(end) = last.content[abs..].find("</patch>") {
+                                        let tag_end = abs + end + 8;
+                                        let before = last.content[..abs].trim_end().to_string();
+                                        let after  = last.content[tag_end..].to_string();
+                                        let rendered = format!("```diff\n{}\n```", diff.trim());
+                                        last.content = if before.is_empty() {
+                                            rendered + &after
+                                        } else {
+                                            format!("{before}\n{rendered}{after}")
+                                        };
+                                    }
+                                }
+                                last.thinking_secs = self.thinking_end_secs
+                                    .or_else(|| self.stream_started_at.map(|t| t.elapsed().as_secs_f64()));
+                            }
+                            self.pending_patch = Some(diff);
+                            self.stream_state = StreamState::Idle;
+                            self.stream_started_at = None;
+                            self.thinking_end_secs = None;
+                            self.ask = Some(InputRequest {
+                                question: "Apply this patch?".to_string(),
+                                kind: AskKind::Confirm,
+                            });
+                            self.ask_cursor = 0;
+                            return;
+                        }
+                        // detect <mood>...</mood> — update state, strip from display, continue streaming
+                        let mood_info: Option<String> = if let Some(last) = self.messages.last() {
+                            if last.role == Role::Assistant { extract_mood_tag(&last.content) } else { None }
+                        } else { None };
+                        if let Some(emoji) = mood_info {
+                            if let Some(last) = self.messages.last_mut() {
+                                let scan_from = last.content.rfind("</think>").map(|i| i + 8).unwrap_or(0);
+                                if let Some(p) = last.content[scan_from..].find("<mood>") {
+                                    let abs = scan_from + p;
+                                    if let Some(end) = last.content[abs..].find("</mood>") {
+                                        let tag_end = abs + end + 7;
+                                        let before = last.content[..abs].trim_end().to_string();
+                                        let after = last.content[tag_end..].to_string();
+                                        last.content = before + &after;
+                                    }
+                                }
+                            }
+                            self.current_mood = Some(emoji);
+                        }
                     }
                     if chunk.done {
                         // attach token stats
@@ -735,6 +824,33 @@ impl App {
     }
 
     pub fn submit_ask(&mut self, response: String) {
+        // patch confirmation: apply or decline before normal ask handling
+        if let Some(diff) = self.pending_patch.take() {
+            self.ask = None;
+            self.ask_cursor = 0;
+            self.input.clear();
+            self.cursor_pos = 0;
+            self.auto_scroll = true;
+            let result = if response == "Yes" {
+                apply_patch(&diff, &self.working_dir)
+            } else {
+                "Patch declined.".to_string()
+            };
+            self.messages.push(Message {
+                role: Role::Tool,
+                content: result.clone(),
+                llm_content: result,
+                images: vec![],
+                attachments: vec![],
+                thinking: String::new(),
+                thinking_secs: None,
+                stats: None,
+                tool_call: Some("⊕ patch".to_string()),
+            });
+            self.start_stream();
+            return;
+        }
+
         let ask = match self.ask.take() { Some(a) => a, None => return };
         let label = if ask.question.is_empty() {
             "↩ User selection".to_string()
@@ -775,6 +891,131 @@ impl App {
         self.completion = None;
         self.ask = None;
         self.ask_cursor = 0;
+        self.current_mood = None;
+        self.pending_patch = None;
+    }
+
+    // --- pinned files ---
+
+    fn full_system_prompt(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if !self.tool_context.is_empty() {
+            parts.push(self.tool_context.clone());
+        }
+        if !self.pinned_files.is_empty() {
+            let mut section = "## Pinned files\n\nThese files are always in context:".to_string();
+            for pf in &self.pinned_files {
+                section.push_str(&format!("\n\n<file_content path=\"{}\">\n{}\n</file_content>", pf.display, pf.content));
+            }
+            parts.push(section);
+        }
+        parts.join("\n\n---\n\n")
+    }
+
+    pub fn trigger_warmup(&mut self) {
+        if !self.warmup { return; }
+        let Some(model) = self.selected_model.clone() else { return };
+        let system = self.full_system_prompt();
+        if system.is_empty() { return; }
+        let num_ctx = match self.ctx_strategy {
+            CtxStrategy::Full => self.context_length,
+            CtxStrategy::Dynamic => self.context_length.map(|max| {
+                let rounded = if self.ctx_pow2 { 8192u64.next_power_of_two() } else { 8192 };
+                rounded.min(max)
+            }),
+        };
+        let base_url   = self.base_url.clone();
+        let keep_alive = self.keep_alive;
+        let (tx, rx) = mpsc::channel();
+        self.warmup_rx = Some(rx);
+        self.warmup_started_at = Some(std::time::Instant::now());
+        std::thread::spawn(move || {
+            crate::ollama::warmup(&base_url, model, system, num_ctx, keep_alive);
+            let _ = tx.send(());
+        });
+    }
+
+    /// Check mtime of all pinned files and update `changed` flag.
+    pub fn check_pinned_files(&mut self) {
+        for pf in &mut self.pinned_files {
+            let new_mtime = pf.path.metadata().ok().and_then(|m| m.modified().ok());
+            pf.changed = new_mtime != pf.mtime;
+        }
+    }
+
+    /// Generate diffs for changed pinned files, update snapshots, return note for llm_content.
+    fn collect_pinned_diffs(&mut self) -> String {
+        let mut notes: Vec<String> = Vec::new();
+        for pf in &mut self.pinned_files {
+            let Ok(new_content) = std::fs::read_to_string(&pf.path) else { continue };
+            let new_mtime = pf.path.metadata().ok().and_then(|m| m.modified().ok());
+            if new_mtime == pf.mtime && new_content == pf.content { continue; }
+            let diff = file_diff(&pf.content, &new_content, &pf.display);
+            if !diff.is_empty() {
+                notes.push(format!("[{} changed since your last response]\n```diff\n{}\n```", pf.display, diff.trim()));
+            }
+            pf.content = new_content;
+            pf.mtime   = new_mtime;
+            pf.changed = false;
+        }
+        notes.join("\n\n")
+    }
+
+    pub fn pin_file(&mut self, display: String) {
+        if self.pinned_files.iter().any(|pf| pf.display == display) { return; }
+        let path = self.working_dir.join(&display);
+        let Ok(content) = std::fs::read_to_string(&path) else { return };
+        let mtime = path.metadata().ok().and_then(|m| m.modified().ok());
+        self.pinned_files.push(PinnedFile { path, display, content, mtime, changed: false });
+        self.trigger_warmup();
+    }
+
+    pub fn unpin_file(&mut self, display: &str) {
+        self.pinned_files.retain(|pf| pf.display != display);
+        self.trigger_warmup();
+    }
+
+    pub fn open_file_picker(&mut self) {
+        self.file_picker = Some(FilePicker { query: String::new(), cursor: 0 });
+    }
+
+    pub fn close_file_picker(&mut self) {
+        self.file_picker = None;
+    }
+
+    pub fn file_picker_accept(&mut self) {
+        let candidates = self.file_picker_candidates();
+        if let Some(selected) = self.file_picker.as_ref().and_then(|fp| candidates.get(fp.cursor)).cloned() {
+            if self.pinned_files.iter().any(|pf| pf.display == selected) {
+                self.unpin_file(&selected.clone());
+            } else {
+                self.pin_file(selected);
+            }
+        }
+    }
+
+    pub fn file_picker_prev(&mut self) {
+        if let Some(fp) = &mut self.file_picker {
+            if fp.cursor > 0 { fp.cursor -= 1; }
+        }
+    }
+
+    pub fn file_picker_next(&mut self) {
+        let len = self.file_picker_candidates().len();
+        if let Some(fp) = &mut self.file_picker {
+            if fp.cursor + 1 < len { fp.cursor += 1; }
+        }
+    }
+
+    pub fn file_picker_candidates(&self) -> Vec<String> {
+        let query = self.file_picker.as_ref().map(|fp| fp.query.to_lowercase()).unwrap_or_default();
+        let mut results = Vec::new();
+        collect_picker_files(&self.working_dir, &self.working_dir, 0, &mut results);
+        if !query.is_empty() {
+            results.retain(|f: &String| f.to_lowercase().contains(&query));
+        }
+        results.sort();
+        results
     }
 
     // --- synapse execution ---
@@ -1071,18 +1312,36 @@ impl App {
 
     // --- path completion ---
 
-    /// Recompute completion candidates based on the @token under the cursor.
+    /// Recompute completion candidates based on the trigger token under the cursor.
+    /// `@partial` → path completion; `/partial` at line start → template completion.
     pub fn update_completion(&mut self) {
         if let Some((at_pos, partial)) = self.at_token_before_cursor() {
             let candidates = get_path_completions(partial, &self.working_dir);
             if !candidates.is_empty() {
                 let cursor = match &self.completion {
-                    Some(c) if c.token_start == at_pos => {
+                    Some(c) if c.token_start == at_pos && c.kind == CompletionKind::Path => {
                         c.cursor.min(candidates.len().saturating_sub(1))
                     }
                     _ => 0,
                 };
-                self.completion = Some(Completion { candidates, cursor, token_start: at_pos });
+                self.completion = Some(Completion { candidates, cursor, token_start: at_pos, kind: CompletionKind::Path });
+                return;
+            }
+        }
+        if let Some((slash_pos, partial)) = self.slash_token_before_cursor() {
+            let partial_lower = partial.to_lowercase();
+            let candidates: Vec<String> = self.templates.iter()
+                .filter(|(name, _)| name.to_lowercase().starts_with(&partial_lower))
+                .map(|(name, _)| name.clone())
+                .collect();
+            if !candidates.is_empty() {
+                let cursor = match &self.completion {
+                    Some(c) if c.token_start == slash_pos && c.kind == CompletionKind::Template => {
+                        c.cursor.min(candidates.len().saturating_sub(1))
+                    }
+                    _ => 0,
+                };
+                self.completion = Some(Completion { candidates, cursor, token_start: slash_pos, kind: CompletionKind::Template });
                 return;
             }
         }
@@ -1092,15 +1351,25 @@ impl App {
     /// Accept the currently selected completion candidate.
     pub fn complete_accept(&mut self) {
         if let Some(comp) = self.completion.take() {
-            if let Some(selected) = comp.candidates.get(comp.cursor) {
-                let at_byte = self.char_to_byte(comp.token_start);
+            if let Some(selected) = comp.candidates.get(comp.cursor).cloned() {
+                let token_byte = self.char_to_byte(comp.token_start);
                 let cursor_byte = self.char_to_byte(self.cursor_pos);
-                let new_token = format!("@{selected}");
-                self.input.replace_range(at_byte..cursor_byte, &new_token);
-                self.cursor_pos = comp.token_start + new_token.chars().count();
-                // keep popup open when a directory was selected
-                if selected.ends_with('/') {
-                    self.update_completion();
+                match comp.kind {
+                    CompletionKind::Template => {
+                        if let Some((_, body)) = self.templates.iter().find(|(n, _)| n == &selected) {
+                            let body = body.clone();
+                            self.input.replace_range(token_byte..cursor_byte, &body);
+                            self.cursor_pos = comp.token_start + body.chars().count();
+                        }
+                    }
+                    CompletionKind::Path => {
+                        let new_token = format!("@{selected}");
+                        self.input.replace_range(token_byte..cursor_byte, &new_token);
+                        self.cursor_pos = comp.token_start + new_token.chars().count();
+                        if selected.ends_with('/') {
+                            self.update_completion();
+                        }
+                    }
                 }
             }
         }
@@ -1136,6 +1405,24 @@ impl App {
             if !after_at.contains(' ') && !after_at.contains('\n') {
                 let at_char_pos = self.input[..at_byte].chars().count();
                 return Some((at_char_pos, after_at));
+            }
+        }
+        None
+    }
+
+    /// Returns the (char_pos_of_/, partial_after_/) if the cursor is inside a /token
+    /// that begins at the start of the input or right after a newline.
+    fn slash_token_before_cursor(&self) -> Option<(usize, &str)> {
+        let byte_cursor = self.char_to_byte(self.cursor_pos);
+        let before = &self.input[..byte_cursor];
+        if let Some(slash_byte) = before.rfind('/') {
+            let after_slash = &before[slash_byte + 1..];
+            if !after_slash.contains(' ') && !after_slash.contains('\n') {
+                let before_slash = &before[..slash_byte];
+                if before_slash.is_empty() || before_slash.ends_with('\n') {
+                    let slash_char_pos = self.input[..slash_byte].chars().count();
+                    return Some((slash_char_pos, after_slash));
+                }
             }
         }
         None
@@ -1256,6 +1543,69 @@ fn get_path_completions(partial: &str, working_dir: &Path) -> Vec<String> {
         b.ends_with('/').cmp(&a.ends_with('/')).then(a.cmp(b))
     });
     results
+}
+
+// ── pinned file helpers ───────────────────────────────────────────────────────
+
+/// Generate a unified diff between two content strings using the `diff` command.
+fn file_diff(old: &str, new: &str, label: &str) -> String {
+    let dir = std::env::temp_dir();
+    let old_path = dir.join("cognilite_pin_old.txt");
+    let new_path = dir.join("cognilite_pin_new.txt");
+    let _ = std::fs::write(&old_path, old);
+    let _ = std::fs::write(&new_path, new);
+    let out = std::process::Command::new("diff")
+        .args(["-u", "--label", &format!("a/{label}"), "--label", &format!("b/{label}")])
+        .arg(&old_path).arg(&new_path).output();
+    let _ = std::fs::remove_file(&old_path);
+    let _ = std::fs::remove_file(&new_path);
+    match out {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+        Err(_) => String::new(),
+    }
+}
+
+/// Recursively collect text files relative to `base`, depth-limited.
+fn collect_picker_files(base: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
+    if depth > 4 { return; }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with('.') || name_str == "target" || name_str == "node_modules" { continue; }
+        if path.is_dir() {
+            collect_picker_files(base, &path, depth + 1, out);
+        } else {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if TEXT_EXTS.contains(&ext.as_str()) || ext.is_empty() {
+                if let Ok(rel) = path.strip_prefix(base) {
+                    out.push(rel.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+}
+
+// ── template loading ──────────────────────────────────────────────────────────
+
+fn load_templates(dir: &Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return out };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                if let Ok(body) = std::fs::read_to_string(&path) {
+                    out.push((name.to_string(), body.trim().to_string()));
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
 }
 
 // ── file attachment resolution ────────────────────────────────────────────────
@@ -1421,6 +1771,65 @@ pub fn extract_ask_tag(content: &str) -> Option<(AskKind, String)> {
     } else {
         Some((AskKind::Text, inner.to_string()))
     }
+}
+
+/// Detects a complete `<patch>...</patch>` tag outside think blocks. Returns the raw diff content.
+fn extract_patch_tag(content: &str) -> Option<String> {
+    let scan = match content.rfind("</think>") {
+        Some(i) => &content[i + 8..],
+        None => {
+            if content.contains("<think>") { return None; }
+            content
+        }
+    };
+    let start = scan.find("<patch>")? + 7;
+    let end   = scan.find("</patch>")?;
+    if end >= start { Some(scan[start..end].to_string()) } else { None }
+}
+
+/// Applies a unified diff using `patch -p1` in the given working directory.
+fn apply_patch(diff: &str, working_dir: &std::path::Path) -> String {
+    let tmp = std::env::temp_dir().join("cognilite_patch.diff");
+    if let Err(e) = std::fs::write(&tmp, diff) {
+        return format!("error: could not write patch file: {e}");
+    }
+    let file = match std::fs::File::open(&tmp) {
+        Ok(f) => f,
+        Err(e) => return format!("error opening patch file: {e}"),
+    };
+    let out = std::process::Command::new("patch")
+        .args(["-p1", "--batch"])
+        .stdin(file)
+        .current_dir(working_dir)
+        .output();
+    let _ = std::fs::remove_file(&tmp);
+    match out {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let combined = format!("{}{}", stdout.trim(), stderr.trim());
+            if o.status.success() {
+                format!("Patch applied successfully.\n{}", combined.trim())
+            } else {
+                format!("Patch failed:\n{}", combined.trim())
+            }
+        }
+        Err(e) => format!("error: patch command not found or failed: {e}"),
+    }
+}
+
+/// Detects a complete `<mood>...</mood>` tag outside think blocks. Returns the emoji string.
+fn extract_mood_tag(content: &str) -> Option<String> {
+    let scan = match content.rfind("</think>") {
+        Some(i) => &content[i + 8..],
+        None => {
+            if content.contains("<think>") { return None; }
+            content
+        }
+    };
+    let start = scan.find("<mood>")? + 6;
+    let end   = scan.find("</mood>")?;
+    if end >= start { Some(scan[start..end].trim().to_string()) } else { None }
 }
 
 pub fn base64_encode(data: &[u8]) -> String {

@@ -2821,6 +2821,9 @@ pub enum RuntimeMode {
     Headless,
     Server    { auto_yes: bool },
     WebSocket { auto_yes: bool },
+    /// WebSocket session where the client is the cognilite TUI (--remote mode).
+    /// Has identical UI capabilities to the local TUI.
+    RemoteTui { auto_yes: bool },
 }
 
 pub fn build_runtime_context(model: &str, ctx_len: Option<u64>, mode: RuntimeMode) -> String {
@@ -2868,6 +2871,24 @@ pub fn build_runtime_context(model: &str, ctx_len: Option<u64>, mode: RuntimeMod
                  The client is connected via WebSocket for a full multi-turn conversation. \
                  You have the same capabilities as the interactive TUI: tool execution, `<ask>`, `<patch>`, \
                  pinned files, and streaming. {note}"
+            )
+        }
+        RuntimeMode::RemoteTui { auto_yes } => {
+            let note = if auto_yes {
+                "All confirmations are auto-accepted (`--yes` is active)."
+            } else {
+                ""
+            };
+            format!(
+                "## Runtime context\n\nMode: **remote TUI** (WebSocket) · Model: `{model}` · Context window: {ctx_str}\n\n\
+                 The user is running the cognilite terminal UI on a remote machine, connected via WebSocket. \
+                 The client renders the full TUI — all interactive features work exactly as in local mode:\n\
+                 - `<ask>` pauses the stream and shows an interactive widget — text input, yes/no, or choice list.\n\
+                 - `<patch>` renders a colored diff and asks the user to confirm before applying on this server.\n\
+                 - Tool results (`<tool>`) are displayed as styled bubbles in the chat.\n\
+                 - Thinking blocks are rendered in a muted color with a 'thought for Xs' label.\n\
+                 - Pinned files are tracked and changes are sent as diffs on each turn.\n\
+                 Use all features freely — the client handles them identically to the local TUI. {note}"
             )
         }
     }

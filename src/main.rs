@@ -185,11 +185,11 @@ fn parse_remote_arg(argv: &[String]) -> Option<String> {
         }
         i += 1;
     }
-    if !params.is_empty() {
-        let sep = if url.contains('?') { '&' } else { '?' };
-        url.push(sep);
-        url.push_str(&params.join("&"));
-    }
+    // always identify as TUI client so the server injects the right runtime context
+    params.push("client=tui".into());
+    let sep = if url.contains('?') { '&' } else { '?' };
+    url.push(sep);
+    url.push_str(&params.join("&"));
     Some(url)
 }
 

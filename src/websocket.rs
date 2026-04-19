@@ -177,6 +177,7 @@ pub struct SessionConfig {
     pub thinking:     bool,
     pub yes:          bool,
     pub thinking_srv: bool, // also show thinking on server stderr
+    pub tui_client:   bool, // client is the cognilite TUI (--remote mode)
 }
 
 impl SessionConfig {
@@ -190,6 +191,7 @@ impl SessionConfig {
             thinking:    get("thinking").map(|s| s == "true" || s == "1").unwrap_or(false),
             yes:         get("yes").map(|s| s == "true" || s == "1").unwrap_or(false),
             thinking_srv,
+            tui_client:  get("client").map(|s| s == "tui").unwrap_or(false),
         }
     }
 }
@@ -238,7 +240,11 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
     app.stream_state = StreamState::Idle;
     app.screen = crate::app::Screen::Chat;
     app.runtime_context = build_runtime_context(&model_name, app.context_length,
-        RuntimeMode::WebSocket { auto_yes: cfg.yes });
+        if cfg.tui_client {
+            RuntimeMode::RemoteTui { auto_yes: cfg.yes }
+        } else {
+            RuntimeMode::WebSocket { auto_yes: cfg.yes }
+        });
 
     // warmup — pre-fill KV cache with system prompt before accepting the first message
     app.warmup = true;

@@ -288,8 +288,21 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
                 // check pinned files for changes (mtime) — same as TUI main loop
                 app.check_pinned_files();
 
+                // append @path refs from optional "attach" array so resolve_attachments() picks them up
+                let input = match val.get("attach").and_then(|v| v.as_array()) {
+                    Some(arr) => {
+                        let refs = arr.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(|p| format!("@{p}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        if refs.is_empty() { content } else { format!("{content} {refs}") }
+                    }
+                    None => content,
+                };
+
                 // delegate to send_message() to get pinned-file diffs and @path handling for free
-                app.input = content;
+                app.input = input;
                 app.cursor_pos = app.input.len();
                 app.send_message();
 

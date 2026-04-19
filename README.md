@@ -235,6 +235,11 @@ Messages are JSON frames. The `type` field determines the action:
 {"type": "message", "content": "list the files in src/"}
 ```
 
+With file attachments (same as `@path` syntax in TUI):
+```json
+{"type": "message", "content": "summarize this file", "attach": ["src/app.rs"]}
+```
+
 ```json
 {"type": "pin", "path": "src/app.rs"}
 {"type": "unpin", "path": "src/app.rs"}
@@ -295,7 +300,7 @@ Unlike a conventional chat API (ChatGPT, Claude.ai, etc.), the model in a WebSoc
 | Thinking output | ✓ (sidebar) | ✓ (`--thinking`) | ✓ (per-request `"thinking":true`) | ✓ (`?thinking=true`) |
 | KV cache warmup | ✓ | ✓ | ✓ | ✓ |
 | Pinned files | ✓ | ✓ (`--pin`) | ✓ (`"pin":[]`) | ✓ (`pin` frame) |
-| File attachments (`@path`) | ✓ | ✓ (`--attach`) | ✓ (`"attach":[]`) | — |
+| File attachments (`@path`) | ✓ | ✓ (`--attach`) | ✓ (`"attach":[]`) | ✓ (`"attach":[]` in frame) |
 | Neuron/preset selection | ✓ | ✓ | ✓ | ✓ |
 | Auto-confirm (`--yes`) | — | ✓ | ✓ | ✓ |
 | Runtime mode injected in system prompt | ✓ | ✓ | ✓ | ✓ |

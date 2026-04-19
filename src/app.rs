@@ -1069,6 +1069,14 @@ impl App {
         use crate::ws_client::WsClientFrame as F;
         match frame {
             F::Connected { model, .. } => {
+                // populate model list so the model select screen works if the user navigates there
+                self.models = vec![crate::ollama::ModelEntry {
+                    name: model.clone(),
+                    parameter_size: None,
+                    quantization_level: None,
+                    size_bytes: None,
+                }];
+                self.loading_models = false;
                 self.selected_model = Some(model);
                 // warmup/connecting phase is over; allow input
                 if self.stream_state == StreamState::Streaming {

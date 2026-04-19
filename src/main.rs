@@ -46,10 +46,8 @@ fn main() -> Result<()> {
                     App::prewarm_highlight();
                     app.ws_tx = Some(tx);
                     app.ws_rx = Some(rx);
-                    app.selected_model = Some("connecting…".to_string());
-                    app.screen = app::Screen::Chat;
-                    // show "connecting" spinner until Connected frame arrives
-                    app.stream_state = app::StreamState::Streaming;
+                    app.loading_models = true;
+                    app.screen = app::Screen::ModelSelect;
                     let result = run_loop(terminal, &mut app);
                     let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
                     result

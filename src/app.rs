@@ -629,6 +629,27 @@ impl App {
         }
     }
 
+    /// Send model selection to the server and show the warmup spinner while it sets up.
+    pub fn select_model_remote(&mut self) {
+        let Some(entry) = self.models.get(self.model_cursor) else { return };
+        let name = entry.name.clone();
+        if let Some(ref mut tx) = self.ws_tx {
+            crate::ws_client::send_json(tx, serde_json::json!({"type":"select_model","model":name}));
+        }
+        self.selected_model = Some("connecting…".to_string());
+        self.messages.clear();
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.scroll = 0;
+        self.auto_scroll = true;
+        self.stream_state = StreamState::Streaming; // spinner while server does warmup
+        self.chat_focus = ChatFocus::Input;
+        self.current_mood = None;
+        self.pending_patch = None;
+        self.ask = None;
+        self.screen = Screen::Chat;
+    }
+
     pub fn send_message(&mut self) {
         if self.input.trim().is_empty() || self.stream_state == StreamState::Streaming {
             return;
@@ -1098,17 +1119,26 @@ impl App {
     fn handle_ws_frame(&mut self, frame: crate::ws_client::WsClientFrame) -> bool {
         use crate::ws_client::WsClientFrame as F;
         match frame {
-            F::Connected { model, .. } => {
-                // populate model list so the model select screen works if the user navigates there
-                self.models = vec![crate::ollama::ModelEntry {
-                    name: model.clone(),
-                    parameter_size: None,
-                    quantization_level: None,
-                    size_bytes: None,
-                }];
+            F::Models { entries } => {
+                self.models = entries;
                 self.loading_models = false;
+                self.model_cursor = 0;
+                self.model_search.clear();
+                self.screen = Screen::ModelSelect;
+            }
+
+            F::Connected { model, .. } => {
+                // if models weren't sent (old server or --model in query), populate fallback
+                if self.models.is_empty() {
+                    self.models = vec![crate::ollama::ModelEntry {
+                        name: model.clone(),
+                        parameter_size: None,
+                        quantization_level: None,
+                        size_bytes: None,
+                    }];
+                    self.loading_models = false;
+                }
                 self.selected_model = Some(model);
-                // warmup/connecting phase is over; allow input
                 if self.stream_state == StreamState::Streaming {
                     self.stream_state = StreamState::Idle;
                 }
@@ -1636,10 +1666,14 @@ impl App {
             Ok(Ok((ws_tx, ws_rx))) => {
                 self.ws_tx = Some(ws_tx);
                 self.ws_rx = Some(ws_rx);
-                self.selected_model = Some("connecting…".to_string());
                 self.messages.clear();
-                self.screen = Screen::Chat;
-                self.stream_state = StreamState::Streaming;
+                self.models = vec![];
+                self.loading_models = true;
+                self.model_cursor = 0;
+                self.model_search.clear();
+                self.selected_model = None;
+                self.screen = Screen::ModelSelect;
+                self.stream_state = StreamState::Idle;
                 self.remote_connecting = false;
             }
             Ok(Err(e)) => {

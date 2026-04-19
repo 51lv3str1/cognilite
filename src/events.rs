@@ -427,6 +427,10 @@ fn handle_model_select(app: &mut App, key: KeyEvent) {
             return;
         }
         KeyCode::Esc => {
+            if app.ws_tx.is_some() {
+                app.switch_to_local();
+                return;
+            }
             if !app.model_search.is_empty() {
                 app.model_search.clear();
                 snap_cursor(&mut app.model_cursor, &(0..app.models.len()).collect::<Vec<_>>());
@@ -445,7 +449,9 @@ fn handle_model_select(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up   => nav_prev(&mut app.model_cursor, &filtered),
         KeyCode::Down => nav_next(&mut app.model_cursor, &filtered),
-        KeyCode::Enter => app.select_model(),
+        KeyCode::Enter => {
+            if app.ws_tx.is_some() { app.select_model_remote(); } else { app.select_model(); }
+        }
         KeyCode::Backspace => {
             app.model_search.pop();
             let new_filtered: Vec<usize> = app.models.iter().enumerate()

@@ -18,6 +18,7 @@ pub enum WsClientFrame {
     Patch(String),
     Mood(String),
     FilePreview { path: String, content: String },
+    Models { entries: Vec<crate::ollama::ModelEntry> },
     LsResult { path: String, entries: Vec<(String, bool)> }, // (name, is_dir)
     Done { tps: f64, tokens: u64, prompt_eval: u64 },
     WarmupStart,
@@ -186,6 +187,16 @@ fn parse_frame(val: serde_json::Value) -> WsClientFrame {
         Some("file_preview") => WsClientFrame::FilePreview {
             path:    s("path"),
             content: s("content"),
+        },
+        Some("models") => WsClientFrame::Models {
+            entries: val["entries"].as_array().map(|arr| {
+                arr.iter().map(|e| crate::ollama::ModelEntry {
+                    name: e["name"].as_str().unwrap_or("").to_string(),
+                    parameter_size: e["parameter_size"].as_str().map(String::from),
+                    quantization_level: e["quantization_level"].as_str().map(String::from),
+                    size_bytes: e["size_bytes"].as_u64(),
+                }).collect()
+            }).unwrap_or_default(),
         },
         Some("ls_result") => WsClientFrame::LsResult {
             path: s("path"),

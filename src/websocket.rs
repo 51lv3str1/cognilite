@@ -218,19 +218,55 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
             return;
         }
     }
-    let model_name = match cfg.model {
-        Some(ref m) => {
-            if app.models.iter().any(|e| e.name == *m) { m.clone() }
-            else {
-                send_json(&mut stream, serde_json::json!({"type":"error","content": format!("model '{m}' not found")}));
-                return;
+    let model_name: String = if cfg.tui_client && cfg.model.is_none() {
+        // send model list and wait for the client to choose
+        let entries: Vec<serde_json::Value> = app.models.iter().map(|e| serde_json::json!({
+            "name": e.name,
+            "parameter_size": e.parameter_size,
+            "quantization_level": e.quantization_level,
+            "size_bytes": e.size_bytes,
+        })).collect();
+        if app.models.is_empty() {
+            send_json(&mut stream, serde_json::json!({"type":"error","content":"no models available"}));
+            return;
+        }
+        if !send_json(&mut stream, serde_json::json!({"type":"models","entries":entries})) { return; }
+        // blocking wait for select_model frame
+        loop {
+            match read_frame(&mut stream) {
+                None => return,
+                Some((OP_CLOSE, _)) => { write_frame(&mut stream, OP_CLOSE, &[]); return; }
+                Some((OP_PING, p))  => { write_frame(&mut stream, OP_PONG, &p); }
+                Some((OP_TEXT, payload)) => {
+                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&payload) {
+                        if v.get("type").and_then(|t| t.as_str()) == Some("select_model") {
+                            if let Some(name) = v.get("model").and_then(|m| m.as_str()) {
+                                if app.models.iter().any(|e| e.name == name) {
+                                    break name.to_string();
+                                }
+                                send_json(&mut stream, serde_json::json!({"type":"error","content":format!("model '{name}' not found")}));
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
-        None => match app.models.first() {
-            Some(e) => e.name.clone(),
-            None => {
-                send_json(&mut stream, serde_json::json!({"type":"error","content":"no models available"}));
-                return;
+    } else {
+        match cfg.model {
+            Some(ref m) => {
+                if app.models.iter().any(|e| e.name == *m) { m.clone() }
+                else {
+                    send_json(&mut stream, serde_json::json!({"type":"error","content": format!("model '{m}' not found")}));
+                    return;
+                }
+            }
+            None => match app.models.first() {
+                Some(e) => e.name.clone(),
+                None => {
+                    send_json(&mut stream, serde_json::json!({"type":"error","content":"no models available"}));
+                    return;
+                }
             }
         }
     };

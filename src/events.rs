@@ -249,8 +249,27 @@ fn handle_config(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_remote_connect(app: &mut App, key: KeyEvent) {
-    if app.remote_connecting { return; } // ignore input while connecting
+    if app.remote_connecting { return; }
     use crossterm::event::KeyModifiers;
+    use crate::app::RemoteConnectMode;
+
+    // Alt+Left / Alt+Right switch mode
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        match key.code {
+            KeyCode::Left => {
+                app.remote_connect_error = None;
+                app.remote_connect_mode = RemoteConnectMode::OllamaUrl;
+                return;
+            }
+            KeyCode::Right => {
+                app.remote_connect_error = None;
+                app.remote_connect_mode = RemoteConnectMode::WebSocket;
+                return;
+            }
+            _ => {}
+        }
+    }
+
     match key.code {
         KeyCode::Tab => { app.toggle_config(); return; }
         KeyCode::Esc => {
@@ -258,46 +277,122 @@ fn handle_remote_connect(app: &mut App, key: KeyEvent) {
             app.screen = crate::app::Screen::ModelSelect;
         }
         KeyCode::Enter => {
-            if !app.remote_url.trim().is_empty() {
-                app.start_remote_connect();
+            app.remote_connect_error = None;
+            match app.remote_connect_mode {
+                RemoteConnectMode::OllamaUrl => {
+                    if !app.remote_ollama_url.trim().is_empty() {
+                        app.start_remote_ollama();
+                    }
+                }
+                RemoteConnectMode::WebSocket => {
+                    if !app.remote_url.trim().is_empty() {
+                        app.start_remote_connect();
+                    }
+                }
             }
         }
         KeyCode::Backspace => {
-            if app.remote_url_cursor > 0 {
-                let byte = char_to_byte(&app.remote_url, app.remote_url_cursor - 1);
-                let end  = char_to_byte(&app.remote_url, app.remote_url_cursor);
-                app.remote_url.drain(byte..end);
-                app.remote_url_cursor -= 1;
+            match app.remote_connect_mode {
+                RemoteConnectMode::OllamaUrl => {
+                    if app.remote_ollama_cursor > 0 {
+                        let byte = char_to_byte(&app.remote_ollama_url, app.remote_ollama_cursor - 1);
+                        let end  = char_to_byte(&app.remote_ollama_url, app.remote_ollama_cursor);
+                        app.remote_ollama_url.drain(byte..end);
+                        app.remote_ollama_cursor -= 1;
+                    }
+                }
+                RemoteConnectMode::WebSocket => {
+                    if app.remote_url_cursor > 0 {
+                        let byte = char_to_byte(&app.remote_url, app.remote_url_cursor - 1);
+                        let end  = char_to_byte(&app.remote_url, app.remote_url_cursor);
+                        app.remote_url.drain(byte..end);
+                        app.remote_url_cursor -= 1;
+                    }
+                }
             }
         }
         KeyCode::Delete => {
-            if app.remote_url_cursor < app.remote_url.chars().count() {
-                let byte = char_to_byte(&app.remote_url, app.remote_url_cursor);
-                let end  = char_to_byte(&app.remote_url, app.remote_url_cursor + 1);
-                app.remote_url.drain(byte..end);
+            match app.remote_connect_mode {
+                RemoteConnectMode::OllamaUrl => {
+                    if app.remote_ollama_cursor < app.remote_ollama_url.chars().count() {
+                        let byte = char_to_byte(&app.remote_ollama_url, app.remote_ollama_cursor);
+                        let end  = char_to_byte(&app.remote_ollama_url, app.remote_ollama_cursor + 1);
+                        app.remote_ollama_url.drain(byte..end);
+                    }
+                }
+                RemoteConnectMode::WebSocket => {
+                    if app.remote_url_cursor < app.remote_url.chars().count() {
+                        let byte = char_to_byte(&app.remote_url, app.remote_url_cursor);
+                        let end  = char_to_byte(&app.remote_url, app.remote_url_cursor + 1);
+                        app.remote_url.drain(byte..end);
+                    }
+                }
             }
         }
         KeyCode::Left => {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                app.remote_url_cursor = word_left(&app.remote_url, app.remote_url_cursor);
-            } else if app.remote_url_cursor > 0 {
-                app.remote_url_cursor -= 1;
+            match app.remote_connect_mode {
+                RemoteConnectMode::OllamaUrl => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        app.remote_ollama_cursor = word_left(&app.remote_ollama_url, app.remote_ollama_cursor);
+                    } else if app.remote_ollama_cursor > 0 {
+                        app.remote_ollama_cursor -= 1;
+                    }
+                }
+                RemoteConnectMode::WebSocket => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        app.remote_url_cursor = word_left(&app.remote_url, app.remote_url_cursor);
+                    } else if app.remote_url_cursor > 0 {
+                        app.remote_url_cursor -= 1;
+                    }
+                }
             }
         }
         KeyCode::Right => {
-            let len = app.remote_url.chars().count();
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                app.remote_url_cursor = word_right(&app.remote_url, app.remote_url_cursor);
-            } else if app.remote_url_cursor < len {
-                app.remote_url_cursor += 1;
+            match app.remote_connect_mode {
+                RemoteConnectMode::OllamaUrl => {
+                    let len = app.remote_ollama_url.chars().count();
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        app.remote_ollama_cursor = word_right(&app.remote_ollama_url, app.remote_ollama_cursor);
+                    } else if app.remote_ollama_cursor < len {
+                        app.remote_ollama_cursor += 1;
+                    }
+                }
+                RemoteConnectMode::WebSocket => {
+                    let len = app.remote_url.chars().count();
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        app.remote_url_cursor = word_right(&app.remote_url, app.remote_url_cursor);
+                    } else if app.remote_url_cursor < len {
+                        app.remote_url_cursor += 1;
+                    }
+                }
             }
         }
-        KeyCode::Home => { app.remote_url_cursor = 0; }
-        KeyCode::End  => { app.remote_url_cursor = app.remote_url.chars().count(); }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let byte = char_to_byte(&app.remote_url, app.remote_url_cursor);
-            app.remote_url.insert(byte, c);
-            app.remote_url_cursor += 1;
+        KeyCode::Home => {
+            match app.remote_connect_mode {
+                RemoteConnectMode::OllamaUrl => { app.remote_ollama_cursor = 0; }
+                RemoteConnectMode::WebSocket => { app.remote_url_cursor = 0; }
+            }
+        }
+        KeyCode::End => {
+            match app.remote_connect_mode {
+                RemoteConnectMode::OllamaUrl => { app.remote_ollama_cursor = app.remote_ollama_url.chars().count(); }
+                RemoteConnectMode::WebSocket => { app.remote_url_cursor = app.remote_url.chars().count(); }
+            }
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL)
+                          && !key.modifiers.contains(KeyModifiers::ALT) => {
+            match app.remote_connect_mode {
+                RemoteConnectMode::OllamaUrl => {
+                    let byte = char_to_byte(&app.remote_ollama_url, app.remote_ollama_cursor);
+                    app.remote_ollama_url.insert(byte, c);
+                    app.remote_ollama_cursor += 1;
+                }
+                RemoteConnectMode::WebSocket => {
+                    let byte = char_to_byte(&app.remote_url, app.remote_url_cursor);
+                    app.remote_url.insert(byte, c);
+                    app.remote_url_cursor += 1;
+                }
+            }
         }
         _ => {}
     }

@@ -28,6 +28,12 @@ pub enum Screen {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum RemoteConnectMode {
+    OllamaUrl,  // remote model, local execution
+    WebSocket,  // remote model + remote execution (cognilite server)
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum CtxStrategy {
     Dynamic, // max(8192, used_tokens * 2) — faster, smaller KV cache
     Full,    // model's max context length — slower but never truncates history
@@ -348,11 +354,15 @@ pub struct App {
     // background model fetch triggered by switch_to_local()
     pub local_models_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
     // remote connect screen state
-    pub remote_url: String,
+    pub remote_connect_mode: RemoteConnectMode,
+    pub remote_url: String,       // WS URL input
     pub remote_url_cursor: usize,
+    pub remote_ollama_url: String, // Ollama URL input
+    pub remote_ollama_cursor: usize,
     pub remote_connecting: bool,
     pub remote_connect_error: Option<String>,
     pub remote_connect_rx: Option<mpsc::Receiver<Result<(std::net::TcpStream, mpsc::Receiver<crate::ws_client::WsClientFrame>), String>>>,
+    pub remote_ollama_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
 }
 
 impl App {
@@ -454,11 +464,15 @@ impl App {
             ws_tx: None,
             ws_rx: None,
             local_models_rx: None,
+            remote_connect_mode: RemoteConnectMode::OllamaUrl,
             remote_url: String::new(),
             remote_url_cursor: 0,
+            remote_ollama_url: String::new(),
+            remote_ollama_cursor: 0,
             remote_connecting: false,
             remote_connect_error: None,
             remote_connect_rx: None,
+            remote_ollama_rx: None,
         }
     }
 
@@ -1535,6 +1549,55 @@ impl App {
             let _ = tx.send(crate::ws_client::connect(&ws_url));
         });
         self.remote_connect_rx = Some(rx);
+    }
+
+    /// Switch to a remote Ollama URL (remote model, local execution).
+    pub fn start_remote_ollama(&mut self) {
+        let url = self.remote_ollama_url.trim().to_string();
+        // normalise: add scheme if missing
+        let base_url = if url.starts_with("http://") || url.starts_with("https://") {
+            url
+        } else {
+            format!("http://{url}")
+        };
+        self.base_url = base_url.clone();
+        self.remote_connecting = true;
+        self.remote_connect_error = None;
+
+        let (tx, rx) = mpsc::channel::<Result<Vec<crate::ollama::ModelEntry>, String>>();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::ollama::list_models(&base_url));
+        });
+        self.remote_ollama_rx = Some(rx);
+    }
+
+    /// Poll the background Ollama model fetch triggered from RemoteConnect.
+    pub fn poll_remote_ollama(&mut self) {
+        let rx = match self.remote_ollama_rx.take() {
+            Some(r) => r,
+            None => return,
+        };
+        match rx.try_recv() {
+            Ok(Ok(entries)) => {
+                self.models = entries;
+                self.loading_models = false;
+                self.models_error = None;
+                self.remote_connecting = false;
+                self.selected_model = None;
+                self.screen = Screen::ModelSelect;
+            }
+            Ok(Err(e)) => {
+                self.remote_connect_error = Some(e);
+                self.remote_connecting = false;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.remote_ollama_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.remote_connect_error = Some("connection failed".into());
+                self.remote_connecting = false;
+            }
+        }
     }
 
     /// Poll the background WS connection. On success, transition to Chat.

@@ -433,15 +433,16 @@ fn draw_config(frame: &mut Frame, app: &App) {
 }
 
 fn draw_remote_connect(frame: &mut Frame, app: &App) {
+    use crate::app::RemoteConnectMode;
+
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
     let (title_area, content_area, hints_area) = page_layout(area);
     render_title(frame, title_area);
 
-    // center a panel (max 70 wide, 14 tall)
     let w = area.width.min(70);
-    let h = 14u16;
+    let h = 16u16;
     let panel = Rect {
         x: content_area.x + (content_area.width.saturating_sub(w)) / 2,
         y: content_area.y + (content_area.height.saturating_sub(h)) / 2,
@@ -466,15 +467,47 @@ fn draw_remote_connect(frame: &mut Frame, app: &App) {
         height: panel.height.saturating_sub(2),
     };
 
-    // label
-    let label_area = Rect { y: inner.y + 1, height: 1, ..inner };
+    // mode toggle line: "< Ollama URL  |  WebSocket Session >"
+    let mode_area = Rect { y: inner.y + 1, height: 1, ..inner };
+    let is_ollama = app.remote_connect_mode == RemoteConnectMode::OllamaUrl;
+    let mode_line = Line::from(vec![
+        Span::styled("Alt+← ", Style::default().fg(DIM)),
+        Span::styled(
+            " Remote Ollama ",
+            if is_ollama {
+                Style::default().fg(BG).bg(ACCENT)
+            } else {
+                Style::default().fg(DIM)
+            },
+        ),
+        Span::styled("  │  ", Style::default().fg(DIM)),
+        Span::styled(
+            " Remote Session ",
+            if !is_ollama {
+                Style::default().fg(BG).bg(ACCENT)
+            } else {
+                Style::default().fg(DIM)
+            },
+        ),
+        Span::styled(" Alt+→", Style::default().fg(DIM)),
+    ]);
+    frame.render_widget(Paragraph::new(mode_line), mode_area);
+
+    // mode-specific label + placeholder
+    let (label_text, placeholder) = if is_ollama {
+        ("Ollama URL  (remote model, local execution)", "http://host:11434")
+    } else {
+        ("WebSocket URL  (remote model + remote execution)", "ws://host:8765/ws")
+    };
+
+    let label_area = Rect { y: inner.y + 3, height: 1, ..inner };
     frame.render_widget(
-        Paragraph::new(Span::styled("WebSocket URL", Style::default().fg(DIM))),
+        Paragraph::new(Span::styled(label_text, Style::default().fg(DIM))),
         label_area,
     );
 
     // url input box
-    let input_area = Rect { y: inner.y + 2, height: 3, ..inner };
+    let input_area = Rect { y: inner.y + 4, height: 3, ..inner };
     let input_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -485,26 +518,32 @@ fn draw_remote_connect(frame: &mut Frame, app: &App) {
         }))
         .style(Style::default().bg(SURFACE));
 
-    let display_text = if app.remote_url.is_empty() {
-        Span::styled("ws://host:8765/ws", Style::default().fg(DIM))
+    let (url_text, cursor_col) = if is_ollama {
+        (app.remote_ollama_url.as_str(), app.remote_ollama_cursor)
     } else {
-        Span::styled(app.remote_url.as_str(), Style::default().fg(Color::White))
+        (app.remote_url.as_str(), app.remote_url_cursor)
+    };
+
+    let display_text = if url_text.is_empty() {
+        Span::styled(placeholder, Style::default().fg(DIM))
+    } else {
+        Span::styled(url_text, Style::default().fg(Color::White))
     };
     frame.render_widget(
         Paragraph::new(display_text).block(input_block),
         input_area,
     );
-    // cursor
-    if !app.remote_connecting {
-        let cursor_x = input_area.x + 1 + app.remote_url_cursor as u16;
+
+    if !app.remote_connecting && !url_text.is_empty() {
+        let cursor_x = input_area.x + 1 + cursor_col as u16;
         let cursor_y = input_area.y + 1;
         if cursor_x < input_area.x + input_area.width - 1 {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }
 
-    // status / error line
-    let status_area = Rect { y: inner.y + 5, height: 2, ..inner };
+    // status / error
+    let status_area = Rect { y: inner.y + 7, height: 2, ..inner };
     if app.remote_connecting {
         frame.render_widget(
             Paragraph::new(Span::styled("Connecting…", Style::default().fg(ACCENT)))
@@ -519,7 +558,7 @@ fn draw_remote_connect(frame: &mut Frame, app: &App) {
         );
     } else {
         let note = format!(
-            "Settings: neuron mode = {}",
+            "neuron mode: {}",
             match app.neuron_mode {
                 crate::app::NeuronMode::Manual  => "manual".into(),
                 crate::app::NeuronMode::Smart   => "smart".into(),
@@ -537,6 +576,8 @@ fn draw_remote_connect(frame: &mut Frame, app: &App) {
 
     render_hints(frame, hints_area, vec![
         hint("Enter", "connect"),
+        Span::raw("  "),
+        hint("Alt+←/→", "mode"),
         Span::raw("  "),
         hint("Esc", "back"),
         Span::raw("  "),

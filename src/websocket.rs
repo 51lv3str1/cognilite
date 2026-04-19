@@ -9,7 +9,7 @@ use crate::app::{
     extract_ask_tag, extract_load_neuron_tag, extract_mood_tag, extract_patch_tag,
     extract_tool_call, resolve_attachments,
 };
-use crate::headless::{build_runtime_context, safe_print_boundary};
+use crate::headless::{build_runtime_context, safe_print_boundary, RuntimeMode};
 
 // ── SHA-1 ─────────────────────────────────────────────────────────────────
 
@@ -237,7 +237,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
     app.context_length = crate::ollama::fetch_context_length(base_url, &model_name);
     app.stream_state = StreamState::Idle;
     app.screen = crate::app::Screen::Chat;
-    app.runtime_context = build_runtime_context(&model_name, app.context_length, true, cfg.yes);
+    app.runtime_context = build_runtime_context(&model_name, app.context_length, RuntimeMode::WebSocket { auto_yes: cfg.yes });
 
     let ctx_str = app.context_length.map(|n| format!("{}k", n/1024)).unwrap_or_else(|| "?".into());
 

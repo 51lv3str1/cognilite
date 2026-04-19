@@ -2,6 +2,7 @@ mod app;
 mod clipboard;
 mod headless;
 mod server;
+mod websocket;
 mod synapse;
 mod events;
 mod ollama;

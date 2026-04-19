@@ -392,7 +392,7 @@ fn ask_interactive(kind: &AskKind, question: &str, auto_yes: bool) -> String {
 
 /// Returns the byte offset up to which `content[from..]` can be safely printed,
 /// skipping completed `<think>` blocks and stopping before any protocol tag.
-fn safe_print_boundary(content: &str, from: usize) -> usize {
+pub fn safe_print_boundary(content: &str, from: usize) -> usize {
     const STOP_TAGS: &[&str] = &[
         "<tool>", "</tool>",
         "<load_neuron>", "</load_neuron>",
@@ -430,7 +430,7 @@ fn safe_print_boundary(content: &str, from: usize) -> usize {
     }
 }
 
-fn build_runtime_context(model: &str, ctx_len: Option<u64>, server_mode: bool, auto_yes: bool) -> String {
+pub fn build_runtime_context(model: &str, ctx_len: Option<u64>, server_mode: bool, auto_yes: bool) -> String {
     let ctx_str = ctx_len
         .map(|n| format!("{}k", n / 1024))
         .unwrap_or_else(|| "unknown".to_string());

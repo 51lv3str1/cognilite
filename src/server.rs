@@ -37,10 +37,24 @@ pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool) {
 fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, thinking_server: bool) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "?".into());
 
-    let Some((method, path, body)) = parse_http(&mut stream) else {
+    let Some((method, full_path, headers, body)) = parse_http(&mut stream) else {
         let _ = write!(stream, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
         return;
     };
+
+    // WebSocket upgrade — route to WS session handler
+    let is_ws = headers.get("upgrade").map(|v| v.to_ascii_lowercase() == "websocket").unwrap_or(false);
+    if is_ws {
+        let key = headers.get("sec-websocket-key").cloned().unwrap_or_default();
+        if !crate::websocket::handshake(&mut stream, &key) { return; }
+        let query = crate::websocket::parse_query(&full_path);
+        let cfg = crate::websocket::SessionConfig::from_query(&query, thinking_server);
+        eprintln!("[ws] {peer} upgrading");
+        crate::websocket::run_session(stream, &ollama_url, cfg);
+        return;
+    }
+
+    let path = full_path.splitn(2, '?').next().unwrap_or(&full_path).to_string();
 
     if method != "POST" || path != "/chat" {
         let msg = b"cognilite server: POST /chat required";
@@ -180,7 +194,8 @@ fn build_argv(val: &serde_json::Value, ollama_url: &str, message: &str, thinking
     argv
 }
 
-fn parse_http(stream: &mut TcpStream) -> Option<(String, String, Vec<u8>)> {
+/// Returns (method, full_path_with_query, headers_lowercase_map, body).
+fn parse_http(stream: &mut TcpStream) -> Option<(String, String, std::collections::HashMap<String, String>, Vec<u8>)> {
     let mut reader = BufReader::new(stream as &mut dyn Read);
 
     let mut line = String::new();
@@ -188,21 +203,25 @@ fn parse_http(stream: &mut TcpStream) -> Option<(String, String, Vec<u8>)> {
     let line = line.trim();
     let mut parts = line.splitn(3, ' ');
     let method = parts.next()?.to_string();
-    let path = parts.next()?.split('?').next()?.to_string();
+    let full_path = parts.next()?.to_string();
 
+    let mut headers: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut content_length: usize = 0;
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).ok()?;
         let line = line.trim();
         if line.is_empty() { break; }
-        if line.to_ascii_lowercase().starts_with("content-length:") {
-            content_length = line.split(':').nth(1)?.trim().parse().unwrap_or(0);
+        if let Some(colon) = line.find(':') {
+            let key   = line[..colon].trim().to_ascii_lowercase();
+            let value = line[colon+1..].trim().to_string();
+            if key == "content-length" { content_length = value.parse().unwrap_or(0); }
+            headers.insert(key, value);
         }
     }
 
     let mut body = vec![0u8; content_length];
     if content_length > 0 { reader.read_exact(&mut body).ok()?; }
 
-    Some((method, path, body))
+    Some((method, full_path, headers, body))
 }

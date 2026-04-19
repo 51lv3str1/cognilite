@@ -7,9 +7,9 @@ use std::sync::mpsc::TryRecvError;
 use crate::app::{
     App, AskKind, Attachment, AttachmentKind, Message, NeuronMode, Role, StreamState,
     extract_ask_tag, extract_load_neuron_tag, extract_mood_tag, extract_patch_tag,
-    extract_tool_call, resolve_attachments,
+    extract_tool_call, build_runtime_context, RuntimeMode,
 };
-use crate::headless::{build_runtime_context, safe_print_boundary, RuntimeMode};
+use crate::headless::safe_print_boundary;
 
 // ── SHA-1 ─────────────────────────────────────────────────────────────────
 
@@ -237,10 +237,25 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
     app.context_length = crate::ollama::fetch_context_length(base_url, &model_name);
     app.stream_state = StreamState::Idle;
     app.screen = crate::app::Screen::Chat;
-    app.runtime_context = build_runtime_context(&model_name, app.context_length, RuntimeMode::WebSocket { auto_yes: cfg.yes });
+    app.runtime_context = build_runtime_context(&model_name, app.context_length,
+        RuntimeMode::WebSocket { auto_yes: cfg.yes });
+
+    // warmup — pre-fill KV cache with system prompt before accepting the first message
+    app.warmup = true;
+    app.trigger_warmup();
+    if app.warmup_rx.is_some() {
+        if !send_json(&mut stream, serde_json::json!({"type":"warmup_start"})) { return; }
+        loop {
+            match app.warmup_rx.as_ref().map(|rx| rx.try_recv()) {
+                Some(Ok(())) => { app.warmup_rx = None; break; }
+                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => { app.warmup_rx = None; break; }
+                _ => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
+        }
+        if !send_json(&mut stream, serde_json::json!({"type":"warmup_done"})) { return; }
+    }
 
     let ctx_str = app.context_length.map(|n| format!("{}k", n/1024)).unwrap_or_else(|| "?".into());
-
     eprintln!("[ws] {peer} connected — {model_name}");
 
     if !send_json(&mut stream, serde_json::json!({
@@ -249,7 +264,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
         "ctx": ctx_str,
     })) { return; }
 
-    // outer loop: one message per turn
+    // outer loop: one frame per interaction
     loop {
         let (opcode, payload) = match read_frame(&mut stream) {
             Some(f) => f,
@@ -257,12 +272,9 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
         };
 
         match opcode {
-            OP_CLOSE => {
-                write_frame(&mut stream, OP_CLOSE, &[]);
-                break;
-            }
-            OP_PING => { write_frame(&mut stream, OP_PONG, &payload); continue; }
-            OP_TEXT => {}
+            OP_CLOSE => { write_frame(&mut stream, OP_CLOSE, &[]); break; }
+            OP_PING  => { write_frame(&mut stream, OP_PONG, &payload); continue; }
+            OP_TEXT  => {}
             _ => continue,
         }
 
@@ -273,24 +285,32 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
                 let content = val.get("content").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
                 if content.is_empty() { continue; }
 
-                let (display, llm_content, attachments, images) =
-                    resolve_attachments(&content, &app.working_dir, app.context_length, app.used_tokens);
-                app.messages.push(Message {
-                    role: Role::User,
-                    content: display,
-                    llm_content,
-                    images,
-                    attachments,
-                    thinking: String::new(),
-                    thinking_secs: None,
-                    stats: None,
-                    tool_call: None,
-                });
-                app.start_stream();
+                // check pinned files for changes (mtime) — same as TUI main loop
+                app.check_pinned_files();
+
+                // delegate to send_message() to get pinned-file diffs and @path handling for free
+                app.input = content;
+                app.cursor_pos = app.input.len();
+                app.send_message();
 
                 if !stream_loop(&mut app, &mut stream, cfg.thinking, cfg.thinking_srv, cfg.yes) {
                     break;
                 }
+                app.stream_state = StreamState::Idle;
+            }
+            Some("pin") => {
+                let path = val.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if path.is_empty() { continue; }
+                app.pin_file(path.clone());
+                // re-warm after pinning since system prompt changed
+                app.trigger_warmup();
+                send_json(&mut stream, serde_json::json!({"type":"pinned","path":path}));
+            }
+            Some("unpin") => {
+                let path = val.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                app.unpin_file(path);
+                app.trigger_warmup();
+                send_json(&mut stream, serde_json::json!({"type":"unpinned","path":path}));
             }
             Some("ping") => { send_json(&mut stream, serde_json::json!({"type":"pong"})); }
             _ => {}

@@ -213,6 +213,99 @@ If the request includes `"yes": true`, all confirmations are auto-accepted witho
 
 Only one session can own the server terminal for interactive input at a time. Concurrent requests are queued and processed in order. Non-interactive requests (those that never trigger `<ask>`, or that use `"yes": true`) are not affected by this in practice.
 
+## WebSocket mode
+
+Connects a remote client for a full multi-turn chat session — the closest remote equivalent to the interactive TUI.
+
+```bash
+# start the server (WebSocket upgrade is handled automatically)
+cognilite --server
+
+# connect with websocat (install via brew or cargo)
+websocat ws://localhost:8765/ws
+```
+
+The server upgrades any `GET /ws` request to a WebSocket connection. Each connection gets a dedicated `App` instance with its own conversation history, pinned files, and KV cache.
+
+### Sending messages
+
+Messages are JSON frames. The `type` field determines the action:
+
+```json
+{"type": "message", "content": "list the files in src/"}
+```
+
+```json
+{"type": "pin", "path": "src/app.rs"}
+{"type": "unpin", "path": "src/app.rs"}
+```
+
+### Receiving frames
+
+The server sends structured JSON frames back to the client:
+
+| Frame type | When | Fields |
+|------------|------|--------|
+| `token` | Each streamed token | `content` |
+| `thinking` | Thinking block content | `content` |
+| `tool_call` | Tool is about to run | `command` |
+| `tool_result` | Tool finished | `output` |
+| `ask` | Model needs input | `prompt`, `ask_type` |
+| `patch_confirm` | Patch waiting for apply | `diff` |
+| `patch_result` | Patch applied/rejected | `status`, `output` |
+| `warmup_start` | KV cache pre-fill started | — |
+| `warmup_done` | KV cache ready | — |
+| `pinned` | File pinned | `path` |
+| `unpinned` | File unpinned | `path` |
+| `done` | Response finished | `tokens`, `tok_s` |
+
+### Session query parameters
+
+```
+ws://localhost:8765/ws?model=qwen2.5:7b&thinking=true&yes=true&preset=MyPreset
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `model` | Model to use |
+| `thinking` | Stream thinking blocks to the client |
+| `yes` | Auto-confirm all `<ask type="confirm">` prompts |
+| `preset` | Neuron preset name |
+| `neuron_mode` | `manual`, `smart`, or `presets` |
+
+### What makes WebSocket mode unique
+
+Unlike a conventional chat API (ChatGPT, Claude.ai, etc.), the model in a WebSocket session runs on your own machine with full tool access:
+
+- Executes real shell commands and injects results back into context
+- Reads and writes files directly on the server
+- Applies patches to the codebase
+- `<ask>` prompts are delivered to the client as structured frames — the client sends back an `ask_response` frame and the session continues
+- Pinned files and KV cache warmup work exactly as in the TUI
+- The conversation persists across multiple turns until the connection closes
+
+## Mode comparison
+
+| Feature | TUI | Headless | HTTP Server | WebSocket |
+|---------|:---:|:--------:|:-----------:|:---------:|
+| Multi-turn conversation | ✓ | — | — | ✓ |
+| Tool execution (`<tool>`) | ✓ | ✓ | ✓ | ✓ |
+| Patch application (`<patch>`) | ✓ | ✓ | ✓ | ✓ |
+| Model-driven input (`<ask>`) | ✓ | ✓ (stdin) | ✓ (server terminal) | ✓ (client frame) |
+| Thinking output | ✓ (sidebar) | ✓ (`--thinking`) | ✓ (per-request `"thinking":true`) | ✓ (`?thinking=true`) |
+| KV cache warmup | ✓ | ✓ | ✓ | ✓ |
+| Pinned files | ✓ | ✓ (`--pin`) | ✓ (`"pin":[]`) | ✓ (`pin` frame) |
+| File attachments (`@path`) | ✓ | ✓ (`--attach`) | ✓ (`"attach":[]`) | — |
+| Neuron/preset selection | ✓ | ✓ | ✓ | ✓ |
+| Auto-confirm (`--yes`) | — | ✓ | ✓ | ✓ |
+| Runtime mode injected in system prompt | ✓ | ✓ | ✓ | ✓ |
+| Syntax-highlighted file picker | ✓ | — | — | — |
+| File panel (attachment viewer) | ✓ | — | — | — |
+| Markdown + code rendering | ✓ | — | — | — |
+| Mood indicator (`<mood>`) | ✓ | — | — | — |
+| Context window progress bar | ✓ | — | — | — |
+| Settings screen | ✓ | — | — | — |
+
 ## Keybindings
 
 ### Model select screen
@@ -553,7 +646,8 @@ src/
 ├── app.rs         — App state, message types, input editing, tag interception, tool/patch/ask/mood loop,
 │                    file picker/panel/pinned logic, highlight_code/highlight_file (syntect)
 ├── headless.rs    — headless mode: CLI arg struct, stream loop, stdin ask handler
-├── server.rs      — HTTP server mode: TCP listener, per-connection handler, chunked streaming, argv builder
+├── server.rs      — HTTP server mode: TCP listener, per-connection handler, chunked streaming, argv builder; WebSocket upgrade routing
+├── websocket.rs   — WebSocket session: RFC 6455 handshake (SHA-1 inline), frame I/O, multi-turn stream loop, pin/unpin handling
 ├── synapse.rs     — Neuron/Synapse types, directory loader, tool context builder, .toml parser
 ├── events.rs      — key event dispatch (config / model select / chat / history / ask / picker modes)
 ├── ollama.rs      — Ollama API: list_models, fetch_context_length, stream_chat, warmup

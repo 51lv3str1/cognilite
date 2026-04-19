@@ -4,6 +4,7 @@ use crate::app::{
     App, AskKind, AttachmentKind, Attachment, CtxStrategy, InputRequest, Message, NeuronMode,
     Role, StreamState, extract_ask_tag, extract_load_neuron_tag, extract_mood_tag,
     extract_patch_tag, extract_tool_call, resolve_attachments,
+    build_runtime_context, RuntimeMode,
 };
 
 pub struct HeadlessArgs {
@@ -80,7 +81,7 @@ pub fn run(base_url: &str, args: HeadlessArgs) -> i32 {
 
     app.runtime_context = build_runtime_context(&model_name, app.context_length,
         if args.server_mode { RuntimeMode::Server { auto_yes: args.yes } }
-        else                { RuntimeMode::Headless });
+        else { RuntimeMode::Headless });
 
     // pin files
     for path_str in &args.pin {
@@ -432,50 +433,3 @@ pub fn safe_print_boundary(content: &str, from: usize) -> usize {
     }
 }
 
-pub enum RuntimeMode {
-    Headless,
-    Server { auto_yes: bool },
-    WebSocket { auto_yes: bool },
-}
-
-pub fn build_runtime_context(model: &str, ctx_len: Option<u64>, mode: RuntimeMode) -> String {
-    let ctx_str = ctx_len
-        .map(|n| format!("{}k", n / 1024))
-        .unwrap_or_else(|| "unknown".to_string());
-
-    match mode {
-        RuntimeMode::Headless => format!(
-            "## Runtime context\n\nMode: **headless** (CLI) · Model: `{model}` · Context window: {ctx_str}\n\n\
-             Running non-interactively from the shell. Responds once and exits. \
-             `<ask>` reads from stdin — use it only when operator input is genuinely required."
-        ),
-        RuntimeMode::Server { auto_yes } => {
-            let confirm_note = if auto_yes {
-                "All confirmations are auto-accepted (`--yes` is active) — the operator pre-authorized the request."
-            } else {
-                "`<ask>` prompts go to the server operator's terminal, not the remote client."
-            };
-            format!(
-                "## Runtime context\n\nMode: **server** (HTTP POST /chat) · Model: `{model}` · Context window: {ctx_str}\n\n\
-                 The remote client receives your response as a plain-text stream. \
-                 Avoid `<ask>` when possible — the client cannot send mid-stream input. \
-                 Use tools to gather missing information instead of asking. \
-                 {confirm_note}"
-            )
-        }
-        RuntimeMode::WebSocket { auto_yes } => {
-            let confirm_note = if auto_yes {
-                "All confirmations are auto-accepted (`--yes` is active)."
-            } else {
-                "`<ask>` prompts are sent to the client as a structured frame — the client responds and the conversation continues. \
-                 `<patch>` diffs are sent to the client for confirmation before being applied."
-            };
-            format!(
-                "## Runtime context\n\nMode: **WebSocket session** · Model: `{model}` · Context window: {ctx_str}\n\n\
-                 The client is connected via WebSocket and the conversation is multi-turn — they can send follow-up messages. \
-                 You have full tool access: shell commands, file reads, patches, and user input via `<ask>`. \
-                 {confirm_note}"
-            )
-        }
-    }
-}

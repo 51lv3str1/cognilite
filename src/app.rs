@@ -588,6 +588,7 @@ impl App {
             self.current_mood = None;
             self.pending_patch = None;
             self.screen = Screen::Chat;
+            self.runtime_context = build_runtime_context(&name, self.context_length, RuntimeMode::Tui);
 
             self.trigger_warmup();
         }
@@ -2464,3 +2465,63 @@ pub fn base64_encode(data: &[u8]) -> String {
     }
     out
 }
+
+// ── Runtime mode ──────────────────────────────────────────────────────────
+
+pub enum RuntimeMode {
+    Tui,
+    Headless,
+    Server    { auto_yes: bool },
+    WebSocket { auto_yes: bool },
+}
+
+pub fn build_runtime_context(model: &str, ctx_len: Option<u64>, mode: RuntimeMode) -> String {
+    let ctx_str = ctx_len
+        .map(|n| format!("{}k", n / 1024))
+        .unwrap_or_else(|| "unknown".to_string());
+    match mode {
+        RuntimeMode::Tui => format!(
+            "## Runtime context\n\nMode: **interactive TUI** · Model: `{model}` · Context window: {ctx_str}\n\n\
+             The user is typing in the terminal UI. All features are available:\n\
+             - `<ask>` pauses the stream and shows an interactive widget — text input, yes/no, or choice list.\n\
+             - `<patch>` renders a colored diff and asks the user to confirm before applying.\n\
+             - The file panel on the right shows the currently open file (if any).\n\
+             - Pinned files are injected into every request and tracked for changes.\n\
+             - The user can switch models and toggle neurons from the settings screen.\n\
+             - Thinking blocks are rendered in a muted color with a 'thought for Xs' label."
+        ),
+        RuntimeMode::Headless => format!(
+            "## Runtime context\n\nMode: **headless** (CLI) · Model: `{model}` · Context window: {ctx_str}\n\n\
+             Running non-interactively from the shell. Responds once and exits. \
+             `<ask>` reads from stdin — use it only when operator input is genuinely required."
+        ),
+        RuntimeMode::Server { auto_yes } => {
+            let note = if auto_yes {
+                "All confirmations are auto-accepted (`--yes` is active)."
+            } else {
+                "`<ask>` prompts go to the server operator's terminal, not the remote client."
+            };
+            format!(
+                "## Runtime context\n\nMode: **server** (HTTP POST /chat) · Model: `{model}` · Context window: {ctx_str}\n\n\
+                 The remote client receives your response as a plain-text stream. \
+                 Avoid `<ask>` when possible — the client cannot send mid-stream input. \
+                 Use tools to gather missing information instead of asking. {note}"
+            )
+        }
+        RuntimeMode::WebSocket { auto_yes } => {
+            let note = if auto_yes {
+                "All confirmations are auto-accepted (`--yes` is active)."
+            } else {
+                "`<ask>` prompts are sent to the client as structured frames — the client responds and the conversation continues. \
+                 `<patch>` diffs are shown to the client for confirmation before being applied."
+            };
+            format!(
+                "## Runtime context\n\nMode: **WebSocket session** · Model: `{model}` · Context window: {ctx_str}\n\n\
+                 The client is connected via WebSocket for a full multi-turn conversation. \
+                 You have the same capabilities as the interactive TUI: tool execution, `<ask>`, `<patch>`, \
+                 pinned files, and streaming. {note}"
+            )
+        }
+    }
+}
+

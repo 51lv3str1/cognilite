@@ -261,6 +261,7 @@ pub struct App {
     pub screen: Screen,
     pub base_url: String,
     pub working_dir: PathBuf,
+    pub runtime_context: String, // injected at top of system prompt; set by headless/server mode
     // config
     pub ctx_strategy: CtxStrategy,
     pub config_cursor: usize,   // cursor in ctx strategy section
@@ -350,6 +351,7 @@ impl App {
             screen: Screen::ModelSelect,
             base_url,
             working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            runtime_context: String::new(),
             ctx_strategy: cfg.ctx_strategy,
             config_cursor,
             config_section: 0,
@@ -1127,6 +1129,9 @@ impl App {
 
     fn full_system_prompt(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
+        if !self.runtime_context.is_empty() {
+            parts.push(self.runtime_context.clone());
+        }
         let enabled = self.effective_enabled_neurons();
         match self.neuron_mode {
             NeuronMode::Smart => {

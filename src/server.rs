@@ -122,6 +122,7 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, th
 fn build_argv(val: &serde_json::Value, ollama_url: &str, message: &str, thinking_server: bool) -> Vec<String> {
     let mut argv = vec![
         "--headless".to_string(),
+        "--server-mode".to_string(),
         "--ollama-url".to_string(), ollama_url.to_string(),
         "--message".to_string(), message.to_string(),
     ];

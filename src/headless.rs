@@ -22,6 +22,7 @@ pub struct HeadlessArgs {
     pub yes: bool,
     pub thinking: bool,        // stream thinking to stdout (client receives it)
     pub thinking_stderr: bool, // stream thinking to stderr (server terminal)
+    pub server_mode: bool,     // launched by the HTTP server
 }
 
 impl Default for HeadlessArgs {
@@ -30,7 +31,7 @@ impl Default for HeadlessArgs {
             message: None, model: None, neuron_mode: None, preset: None,
             no_neurons: vec![], temperature: None, top_p: None, repeat_penalty: None,
             ctx_strategy: None, keep_alive: false, pin: vec![], attach: vec![],
-            yes: false, thinking: false, thinking_stderr: false,
+            yes: false, thinking: false, thinking_stderr: false, server_mode: false,
         }
     }
 }
@@ -76,6 +77,8 @@ pub fn run(base_url: &str, args: HeadlessArgs) -> i32 {
     app.context_length = crate::ollama::fetch_context_length(base_url, &model_name);
     app.stream_state = StreamState::Idle;
     app.screen = crate::app::Screen::Chat;
+
+    app.runtime_context = build_runtime_context(&model_name, app.context_length, args.server_mode, args.yes);
 
     // pin files
     for path_str in &args.pin {
@@ -420,5 +423,32 @@ fn safe_print_boundary(content: &str, from: usize) -> usize {
             return abs;
         }
         pos = abs + 1;
+    }
+}
+
+fn build_runtime_context(model: &str, ctx_len: Option<u64>, server_mode: bool, auto_yes: bool) -> String {
+    let ctx_str = ctx_len
+        .map(|n| format!("{}k", n / 1024))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    if server_mode {
+        let confirm_note = if auto_yes {
+            "All confirmations are auto-accepted (`--yes` is active) — the operator pre-authorized the request."
+        } else {
+            "`<ask>` prompts go to the server operator's terminal, not the remote client."
+        };
+        format!(
+            "## Runtime context\n\nMode: **server** (HTTP POST /chat) · Model: `{model}` · Context window: {ctx_str}\n\n\
+             The remote client receives your response as a plain-text stream. \
+             Avoid `<ask>` when possible — the client cannot send mid-stream input. \
+             Use tools to gather missing information instead of asking. \
+             {confirm_note}"
+        )
+    } else {
+        format!(
+            "## Runtime context\n\nMode: **headless** (CLI) · Model: `{model}` · Context window: {ctx_str}\n\n\
+             Running non-interactively from the shell. Responds once and exits. \
+             `<ask>` reads from stdin — use it only when operator input is genuinely required."
+        )
     }
 }

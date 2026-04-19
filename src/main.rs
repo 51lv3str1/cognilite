@@ -118,6 +118,7 @@ fn parse_headless_args(argv: &[String]) -> Option<headless::HeadlessArgs> {
             "--yes" | "-y" => { ha.yes = true; }
             "--thinking" => { ha.thinking = true; }
             "--thinking-stderr" => { ha.thinking_stderr = true; }
+            "--server-mode" => { ha.server_mode = true; }
             arg if !arg.starts_with('-') => {
                 ha.message = Some(arg.to_string());
             }

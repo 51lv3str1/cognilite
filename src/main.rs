@@ -25,8 +25,8 @@ fn main() -> Result<()> {
         std::process::exit(code);
     }
 
-    if let Some((host, port)) = parse_server_args(&argv) {
-        server::run(&ollama_url, &host, port);
+    if let Some((host, port, thinking)) = parse_server_args(&argv) {
+        server::run(&ollama_url, &host, port, thinking);
         return Ok(());
     }
 
@@ -52,20 +52,22 @@ fn get_ollama_url(argv: &[String]) -> String {
     std::env::var("OLLAMA_URL").unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_string())
 }
 
-fn parse_server_args(argv: &[String]) -> Option<(String, u16)> {
+fn parse_server_args(argv: &[String]) -> Option<(String, u16, bool)> {
     if !argv.iter().any(|a| a == "--server") { return None; }
     let mut host = DEFAULT_SERVER_HOST.to_string();
     let mut port = DEFAULT_SERVER_PORT;
+    let mut thinking = false;
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
             "--host" => { i += 1; if i < argv.len() { host = argv[i].clone(); } }
             "--port" => { i += 1; if i < argv.len() { port = argv[i].parse().unwrap_or(DEFAULT_SERVER_PORT); } }
+            "--thinking" => { thinking = true; }
             _ => {}
         }
         i += 1;
     }
-    Some((host, port))
+    Some((host, port, thinking))
 }
 
 fn parse_headless_args(argv: &[String]) -> Option<headless::HeadlessArgs> {
@@ -115,6 +117,7 @@ fn parse_headless_args(argv: &[String]) -> Option<headless::HeadlessArgs> {
             }
             "--yes" | "-y" => { ha.yes = true; }
             "--thinking" => { ha.thinking = true; }
+            "--thinking-stderr" => { ha.thinking_stderr = true; }
             arg if !arg.starts_with('-') => {
                 ha.message = Some(arg.to_string());
             }

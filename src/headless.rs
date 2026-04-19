@@ -19,8 +19,9 @@ pub struct HeadlessArgs {
     pub keep_alive: bool,
     pub pin: Vec<String>,
     pub attach: Vec<String>,
-    pub yes: bool,     // auto-confirm all <ask type="confirm"> prompts
-    pub thinking: bool, // stream thinking content to stderr
+    pub yes: bool,
+    pub thinking: bool,        // stream thinking to stdout (client receives it)
+    pub thinking_stderr: bool, // stream thinking to stderr (server terminal)
 }
 
 impl Default for HeadlessArgs {
@@ -29,7 +30,7 @@ impl Default for HeadlessArgs {
             message: None, model: None, neuron_mode: None, preset: None,
             no_neurons: vec![], temperature: None, top_p: None, repeat_penalty: None,
             ctx_strategy: None, keep_alive: false, pin: vec![], attach: vec![],
-            yes: false, thinking: false,
+            yes: false, thinking: false, thinking_stderr: false,
         }
     }
 }
@@ -122,10 +123,10 @@ pub fn run(base_url: &str, args: HeadlessArgs) -> i32 {
     });
     app.start_stream();
 
-    run_stream_loop(&mut app, args.yes, args.thinking)
+    run_stream_loop(&mut app, args.yes, args.thinking, args.thinking_stderr)
 }
 
-fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool) -> i32 {
+fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool, show_thinking_stderr: bool) -> i32 {
     'outer: loop {
         let rx = match app.stream_rx.take() {
             Some(r) => r,
@@ -162,6 +163,13 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool) -> i32 {
                                     }
                                     print!("{t}");
                                     let _ = std::io::stdout().flush();
+                                }
+                                if show_thinking_stderr {
+                                    if !thinking_open {
+                                        eprintln!("[thinking]");
+                                        thinking_open = true;
+                                    }
+                                    eprint!("{t}");
                                 }
                                 last.thinking.push_str(t);
                             }
@@ -322,7 +330,10 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool) -> i32 {
             }
 
             if chunk.done {
-                if thinking_open { println!("\n[/thinking]"); }
+                if thinking_open {
+                    if show_thinking { println!("\n[/thinking]"); }
+                    if show_thinking_stderr { eprintln!("\n[/thinking]"); }
+                }
                 println!();
                 if let (Some(pt), Some(et), Some(ed)) = (
                     chunk.prompt_eval_count, chunk.eval_count, chunk.eval_duration,

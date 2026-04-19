@@ -7,7 +7,7 @@ use std::sync::Mutex;
 static STDIN_LOCK: Mutex<()> = Mutex::new(());
 
 /// Starts the HTTP server. Blocks until the process is killed.
-pub fn run(ollama_url: &str, host: &str, port: u16) {
+pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool) {
     let addr = format!("{host}:{port}");
     let listener = TcpListener::bind(&addr).unwrap_or_else(|e| {
         eprintln!("[server] failed to bind {addr}: {e}");
@@ -27,14 +27,14 @@ pub fn run(ollama_url: &str, host: &str, port: u16) {
             Ok(s) => {
                 let exe = exe.clone();
                 let ollama = ollama_url.to_string();
-                std::thread::spawn(move || handle(s, exe, ollama));
+                std::thread::spawn(move || handle(s, exe, ollama, thinking_server));
             }
             Err(e) => eprintln!("[server] accept error: {e}"),
         }
     }
 }
 
-fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String) {
+fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, thinking_server: bool) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "?".into());
 
     let Some((method, path, body)) = parse_http(&mut stream) else {
@@ -69,7 +69,7 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String) {
 
     eprintln!("[server] {} — {}", peer, &message[..message.len().min(80)]);
 
-    let argv = build_argv(&val, &ollama_url, &message);
+    let argv = build_argv(&val, &ollama_url, &message, thinking_server);
 
     // Serialize: only one session at a time can use the terminal for interactive prompts.
     // Concurrent non-interactive requests queue here and proceed as soon as the active one finishes.
@@ -119,7 +119,7 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String) {
     // _guard dropped here — next queued connection acquires STDIN_LOCK and proceeds
 }
 
-fn build_argv(val: &serde_json::Value, ollama_url: &str, message: &str) -> Vec<String> {
+fn build_argv(val: &serde_json::Value, ollama_url: &str, message: &str, thinking_server: bool) -> Vec<String> {
     let mut argv = vec![
         "--headless".to_string(),
         "--ollama-url".to_string(), ollama_url.to_string(),
@@ -131,6 +131,9 @@ fn build_argv(val: &serde_json::Value, ollama_url: &str, message: &str) -> Vec<S
     }
     if val.get("thinking").and_then(|v| v.as_bool()).unwrap_or(false) {
         argv.push("--thinking".to_string());
+    }
+    if thinking_server {
+        argv.push("--thinking-stderr".to_string());
     }
 
     if let Some(v) = val.get("model").and_then(|v| v.as_str()) {

@@ -212,6 +212,7 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> color_eyr
         app.poll_stream();
         app.poll_ws();
         app.poll_local_models();
+        app.poll_remote_connect();
         app.poll_highlight();
         app.check_pinned_files();
         app.check_file_panel();

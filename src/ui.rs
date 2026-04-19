@@ -20,9 +20,10 @@ const CODE_BORDER: Color = Color::Rgb(88, 91, 112); // dim — left gutter bar
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     match app.screen {
-        Screen::Config      => draw_config(frame, app),
-        Screen::ModelSelect => draw_model_select(frame, app),
-        Screen::Chat        => draw_chat(frame, app),
+        Screen::Config        => draw_config(frame, app),
+        Screen::ModelSelect   => draw_model_select(frame, app),
+        Screen::RemoteConnect => draw_remote_connect(frame, app),
+        Screen::Chat          => draw_chat(frame, app),
     }
 }
 
@@ -431,6 +432,120 @@ fn draw_config(frame: &mut Frame, app: &App) {
     }
 }
 
+fn draw_remote_connect(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
+
+    let (title_area, content_area, hints_area) = page_layout(area);
+    render_title(frame, title_area);
+
+    // center a panel (max 70 wide, 14 tall)
+    let w = area.width.min(70);
+    let h = 14u16;
+    let panel = Rect {
+        x: content_area.x + (content_area.width.saturating_sub(w)) / 2,
+        y: content_area.y + (content_area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+
+    let block = Block::default()
+        .title(Span::styled(" remote connect ", Style::default().fg(ACCENT)))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(BG));
+
+    frame.render_widget(Clear, panel);
+    frame.render_widget(block, panel);
+
+    let inner = Rect {
+        x: panel.x + 2,
+        y: panel.y + 1,
+        width: panel.width.saturating_sub(4),
+        height: panel.height.saturating_sub(2),
+    };
+
+    // label
+    let label_area = Rect { y: inner.y + 1, height: 1, ..inner };
+    frame.render_widget(
+        Paragraph::new(Span::styled("WebSocket URL", Style::default().fg(DIM))),
+        label_area,
+    );
+
+    // url input box
+    let input_area = Rect { y: inner.y + 2, height: 3, ..inner };
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if app.remote_connect_error.is_some() {
+            ERROR_COLOR
+        } else {
+            ACCENT
+        }))
+        .style(Style::default().bg(SURFACE));
+
+    let display_text = if app.remote_url.is_empty() {
+        Span::styled("ws://host:8765/ws", Style::default().fg(DIM))
+    } else {
+        Span::styled(app.remote_url.as_str(), Style::default().fg(Color::White))
+    };
+    frame.render_widget(
+        Paragraph::new(display_text).block(input_block),
+        input_area,
+    );
+    // cursor
+    if !app.remote_connecting {
+        let cursor_x = input_area.x + 1 + app.remote_url_cursor as u16;
+        let cursor_y = input_area.y + 1;
+        if cursor_x < input_area.x + input_area.width - 1 {
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
+
+    // status / error line
+    let status_area = Rect { y: inner.y + 5, height: 2, ..inner };
+    if app.remote_connecting {
+        frame.render_widget(
+            Paragraph::new(Span::styled("Connecting…", Style::default().fg(ACCENT)))
+                .wrap(Wrap { trim: true }),
+            status_area,
+        );
+    } else if let Some(ref err) = app.remote_connect_error {
+        frame.render_widget(
+            Paragraph::new(Span::styled(err.as_str(), Style::default().fg(ERROR_COLOR)))
+                .wrap(Wrap { trim: true }),
+            status_area,
+        );
+    } else {
+        let note = format!(
+            "Settings: neuron mode = {}",
+            match app.neuron_mode {
+                crate::app::NeuronMode::Manual  => "manual".into(),
+                crate::app::NeuronMode::Smart   => "smart".into(),
+                crate::app::NeuronMode::Presets => app.active_preset
+                    .as_deref()
+                    .map(|p| format!("preset:{p}"))
+                    .unwrap_or_else(|| "presets".into()),
+            }
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(note, Style::default().fg(DIM))),
+            status_area,
+        );
+    }
+
+    render_hints(frame, hints_area, vec![
+        hint("Enter", "connect"),
+        Span::raw("  "),
+        hint("Esc", "back"),
+        Span::raw("  "),
+        hint("Tab", "settings"),
+        Span::raw("  "),
+        hint("Ctrl+←/→", "word jump"),
+    ]);
+}
+
 fn draw_model_select(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
@@ -546,6 +661,8 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         hint("Esc", "clear"),
         Span::raw("  "),
         hint("Tab", "settings"),
+        Span::raw("  "),
+        hint("Ctrl+R", "remote"),
         Span::raw("  "),
         hint("F1", "help"),
         Span::raw("  "),

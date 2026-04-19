@@ -64,9 +64,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
     }
 
     match app.screen {
-        Screen::Config      => handle_config(app, key),
-        Screen::ModelSelect => handle_model_select(app, key),
-        Screen::Chat        => handle_chat(app, key),
+        Screen::Config        => handle_config(app, key),
+        Screen::ModelSelect   => handle_model_select(app, key),
+        Screen::RemoteConnect => handle_remote_connect(app, key),
+        Screen::Chat          => handle_chat(app, key),
     }
 }
 
@@ -247,10 +248,89 @@ fn handle_config(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn handle_model_select(app: &mut App, key: KeyEvent) {
-    if handle_help_keys(app, key) { return; }
+fn handle_remote_connect(app: &mut App, key: KeyEvent) {
+    if app.remote_connecting { return; } // ignore input while connecting
+    use crossterm::event::KeyModifiers;
     match key.code {
         KeyCode::Tab => { app.toggle_config(); return; }
+        KeyCode::Esc => {
+            app.remote_connect_error = None;
+            app.screen = crate::app::Screen::ModelSelect;
+        }
+        KeyCode::Enter => {
+            if !app.remote_url.trim().is_empty() {
+                app.start_remote_connect();
+            }
+        }
+        KeyCode::Backspace => {
+            if app.remote_url_cursor > 0 {
+                let byte = char_to_byte(&app.remote_url, app.remote_url_cursor - 1);
+                let end  = char_to_byte(&app.remote_url, app.remote_url_cursor);
+                app.remote_url.drain(byte..end);
+                app.remote_url_cursor -= 1;
+            }
+        }
+        KeyCode::Delete => {
+            if app.remote_url_cursor < app.remote_url.chars().count() {
+                let byte = char_to_byte(&app.remote_url, app.remote_url_cursor);
+                let end  = char_to_byte(&app.remote_url, app.remote_url_cursor + 1);
+                app.remote_url.drain(byte..end);
+            }
+        }
+        KeyCode::Left => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                app.remote_url_cursor = word_left(&app.remote_url, app.remote_url_cursor);
+            } else if app.remote_url_cursor > 0 {
+                app.remote_url_cursor -= 1;
+            }
+        }
+        KeyCode::Right => {
+            let len = app.remote_url.chars().count();
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                app.remote_url_cursor = word_right(&app.remote_url, app.remote_url_cursor);
+            } else if app.remote_url_cursor < len {
+                app.remote_url_cursor += 1;
+            }
+        }
+        KeyCode::Home => { app.remote_url_cursor = 0; }
+        KeyCode::End  => { app.remote_url_cursor = app.remote_url.chars().count(); }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let byte = char_to_byte(&app.remote_url, app.remote_url_cursor);
+            app.remote_url.insert(byte, c);
+            app.remote_url_cursor += 1;
+        }
+        _ => {}
+    }
+}
+
+/// Byte offset of the nth char in s.
+fn char_to_byte(s: &str, char_idx: usize) -> usize {
+    s.char_indices().nth(char_idx).map(|(b, _)| b).unwrap_or(s.len())
+}
+fn word_left(s: &str, cur: usize) -> usize {
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = cur.saturating_sub(1);
+    while i > 0 && chars[i - 1] != ' ' { i -= 1; }
+    i
+}
+fn word_right(s: &str, cur: usize) -> usize {
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = cur;
+    while i < chars.len() && chars[i] != ' ' { i += 1; }
+    while i < chars.len() && chars[i] == ' ' { i += 1; }
+    i
+}
+
+fn handle_model_select(app: &mut App, key: KeyEvent) {
+    if handle_help_keys(app, key) { return; }
+    use crossterm::event::KeyModifiers;
+    match key.code {
+        KeyCode::Tab => { app.toggle_config(); return; }
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.remote_connect_error = None;
+            app.screen = crate::app::Screen::RemoteConnect;
+            return;
+        }
         KeyCode::Esc => {
             if !app.model_search.is_empty() {
                 app.model_search.clear();

@@ -23,6 +23,7 @@ pub const GEN_PARAMS: &[(&str, &str, f64, f64, f64, f64)] = &[
 pub enum Screen {
     Config,
     ModelSelect,
+    RemoteConnect,
     Chat,
 }
 
@@ -346,6 +347,12 @@ pub struct App {
     pub ws_rx: Option<mpsc::Receiver<crate::ws_client::WsClientFrame>>,
     // background model fetch triggered by switch_to_local()
     pub local_models_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
+    // remote connect screen state
+    pub remote_url: String,
+    pub remote_url_cursor: usize,
+    pub remote_connecting: bool,
+    pub remote_connect_error: Option<String>,
+    pub remote_connect_rx: Option<mpsc::Receiver<Result<(std::net::TcpStream, mpsc::Receiver<crate::ws_client::WsClientFrame>), String>>>,
 }
 
 impl App {
@@ -447,6 +454,11 @@ impl App {
             ws_tx: None,
             ws_rx: None,
             local_models_rx: None,
+            remote_url: String::new(),
+            remote_url_cursor: 0,
+            remote_connecting: false,
+            remote_connect_error: None,
+            remote_connect_rx: None,
         }
     }
 
@@ -572,7 +584,7 @@ impl App {
                 self.config_section = 0;
                 Screen::Config
             }
-            Screen::Chat => Screen::Chat,
+            Screen::Chat | Screen::RemoteConnect => Screen::Chat,
         };
     }
 
@@ -1487,6 +1499,70 @@ impl App {
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.loading_models = false;
+            }
+        }
+    }
+
+    /// Build a WS URL from remote_url, appending app settings as query params.
+    pub fn remote_ws_url(&self) -> String {
+        let mut url = self.remote_url.trim().to_string();
+        let mut params: Vec<String> = vec!["client=tui".into()];
+
+        match self.neuron_mode {
+            NeuronMode::Presets => {
+                params.push("neuron_mode=presets".into());
+                if let Some(ref p) = self.active_preset {
+                    params.push(format!("preset={p}"));
+                }
+            }
+            NeuronMode::Smart  => params.push("neuron_mode=smart".into()),
+            NeuronMode::Manual => params.push("neuron_mode=manual".into()),
+        }
+
+        let sep = if url.contains('?') { '&' } else { '?' };
+        url.push(sep);
+        url.push_str(&params.join("&"));
+        url
+    }
+
+    /// Start a background WS connection attempt from the RemoteConnect screen.
+    pub fn start_remote_connect(&mut self) {
+        self.remote_connecting = true;
+        self.remote_connect_error = None;
+        let ws_url = self.remote_ws_url();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::ws_client::connect(&ws_url));
+        });
+        self.remote_connect_rx = Some(rx);
+    }
+
+    /// Poll the background WS connection. On success, transition to Chat.
+    pub fn poll_remote_connect(&mut self) {
+        let rx = match self.remote_connect_rx.take() {
+            Some(r) => r,
+            None => return,
+        };
+        match rx.try_recv() {
+            Ok(Ok((ws_tx, ws_rx))) => {
+                self.ws_tx = Some(ws_tx);
+                self.ws_rx = Some(ws_rx);
+                self.selected_model = Some("connecting…".to_string());
+                self.messages.clear();
+                self.screen = Screen::Chat;
+                self.stream_state = StreamState::Streaming;
+                self.remote_connecting = false;
+            }
+            Ok(Err(e)) => {
+                self.remote_connect_error = Some(e);
+                self.remote_connecting = false;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.remote_connect_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.remote_connect_error = Some("connection failed".into());
+                self.remote_connecting = false;
             }
         }
     }

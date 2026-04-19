@@ -43,12 +43,12 @@ fn page_layout(area: Rect) -> (Rect, Rect, Rect) {
     (chunks[1], chunks[2], chunks[3])
 }
 
-// Renders the cognilite title with bottom border spanning the given area.
-fn render_title(frame: &mut Frame, area: Rect) {
+fn render_title(frame: &mut Frame, area: Rect, app: &App) {
+    let suffix = app.remote_label.as_deref().unwrap_or("ollama TUI");
     let title = Paragraph::new(Line::from(vec![
         Span::styled("cogni", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Span::styled("lite", Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
-        Span::styled("  ·  ollama TUI", Style::default().fg(DIM)),
+        Span::styled(format!("  ·  {suffix}"), Style::default().fg(DIM)),
     ]))
     .alignment(ratatui::layout::Alignment::Center)
     .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(SURFACE)));
@@ -94,7 +94,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
     let (title_area, content_area, hints_area) = page_layout(area);
-    render_title(frame, title_area);
+    render_title(frame, title_area, app);
 
     // split content: tab bar · search textbox · settings box
     let content_chunks = Layout::default()
@@ -433,16 +433,14 @@ fn draw_config(frame: &mut Frame, app: &App) {
 }
 
 fn draw_remote_connect(frame: &mut Frame, app: &App) {
-    use crate::app::RemoteConnectMode;
-
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
     let (title_area, content_area, hints_area) = page_layout(area);
-    render_title(frame, title_area);
+    render_title(frame, title_area, app);
 
-    let w = area.width.min(70);
-    let h = 16u16;
+    let w = area.width.min(62);
+    let h = 11u16;
     let panel = Rect {
         x: content_area.x + (content_area.width.saturating_sub(w)) / 2,
         y: content_area.y + (content_area.height.saturating_sub(h)) / 2,
@@ -450,15 +448,16 @@ fn draw_remote_connect(frame: &mut Frame, app: &App) {
         height: h,
     };
 
-    let block = Block::default()
-        .title(Span::styled(" remote connect ", Style::default().fg(ACCENT)))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(BG));
-
     frame.render_widget(Clear, panel);
-    frame.render_widget(block, panel);
+    frame.render_widget(
+        Block::default()
+            .title(Span::styled(" remote connect ", Style::default().fg(ACCENT)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .style(Style::default().bg(BG)),
+        panel,
+    );
 
     let inner = Rect {
         x: panel.x + 2,
@@ -467,87 +466,43 @@ fn draw_remote_connect(frame: &mut Frame, app: &App) {
         height: panel.height.saturating_sub(2),
     };
 
-    // mode toggle line: "< Ollama URL  |  WebSocket Session >"
-    let mode_area = Rect { y: inner.y + 1, height: 1, ..inner };
-    let is_ollama = app.remote_connect_mode == RemoteConnectMode::OllamaUrl;
-    let mode_line = Line::from(vec![
-        Span::styled("Alt+← ", Style::default().fg(DIM)),
-        Span::styled(
-            " Remote Ollama ",
-            if is_ollama {
-                Style::default().fg(BG).bg(ACCENT)
-            } else {
-                Style::default().fg(DIM)
-            },
-        ),
-        Span::styled("  │  ", Style::default().fg(DIM)),
-        Span::styled(
-            " Remote Session ",
-            if !is_ollama {
-                Style::default().fg(BG).bg(ACCENT)
-            } else {
-                Style::default().fg(DIM)
-            },
-        ),
-        Span::styled(" Alt+→", Style::default().fg(DIM)),
-    ]);
-    frame.render_widget(Paragraph::new(mode_line), mode_area);
-
-    // mode-specific label + placeholder
-    let (label_text, placeholder) = if is_ollama {
-        ("Ollama URL  (remote model, local execution)", "http://host:11434")
-    } else {
-        ("WebSocket URL  (remote model + remote execution)", "ws://host:8765")
-    };
-
-    let label_area = Rect { y: inner.y + 3, height: 1, ..inner };
+    // label
     frame.render_widget(
-        Paragraph::new(Span::styled(label_text, Style::default().fg(DIM))),
-        label_area,
+        Paragraph::new(Span::styled(
+            "ws://host:port  ·  or  ·  http://host:11434",
+            Style::default().fg(DIM),
+        )),
+        Rect { y: inner.y + 1, height: 1, ..inner },
     );
 
-    // url input box
-    let input_area = Rect { y: inner.y + 4, height: 3, ..inner };
+    // url input
+    let input_area = Rect { y: inner.y + 2, height: 3, ..inner };
+    let border_color = if app.remote_connect_error.is_some() { ERROR_COLOR } else { ACCENT };
     let input_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if app.remote_connect_error.is_some() {
-            ERROR_COLOR
-        } else {
-            ACCENT
-        }))
+        .border_style(Style::default().fg(border_color))
         .style(Style::default().bg(SURFACE));
 
-    let (url_text, cursor_col) = if is_ollama {
-        (app.remote_ollama_url.as_str(), app.remote_ollama_cursor)
+    let display = if app.remote_url.is_empty() {
+        Span::styled("ws://192.168.1.10:8765", Style::default().fg(DIM))
     } else {
-        (app.remote_url.as_str(), app.remote_url_cursor)
+        Span::styled(app.remote_url.as_str(), Style::default().fg(Color::White))
     };
+    frame.render_widget(Paragraph::new(display).block(input_block), input_area);
 
-    let display_text = if url_text.is_empty() {
-        Span::styled(placeholder, Style::default().fg(DIM))
-    } else {
-        Span::styled(url_text, Style::default().fg(Color::White))
-    };
-    frame.render_widget(
-        Paragraph::new(display_text).block(input_block),
-        input_area,
-    );
-
-    if !app.remote_connecting && !url_text.is_empty() {
-        let cursor_x = input_area.x + 1 + cursor_col as u16;
-        let cursor_y = input_area.y + 1;
-        if cursor_x < input_area.x + input_area.width - 1 {
-            frame.set_cursor_position((cursor_x, cursor_y));
+    if !app.remote_connecting && !app.remote_url.is_empty() {
+        let cx = input_area.x + 1 + app.remote_url_cursor as u16;
+        if cx < input_area.x + input_area.width - 1 {
+            frame.set_cursor_position((cx, input_area.y + 1));
         }
     }
 
     // status / error
-    let status_area = Rect { y: inner.y + 7, height: 2, ..inner };
+    let status_area = Rect { y: inner.y + 5, height: 2, ..inner };
     if app.remote_connecting {
         frame.render_widget(
-            Paragraph::new(Span::styled("Connecting…", Style::default().fg(ACCENT)))
-                .wrap(Wrap { trim: true }),
+            Paragraph::new(Span::styled("Connecting…", Style::default().fg(ACCENT))),
             status_area,
         );
     } else if let Some(ref err) = app.remote_connect_error {
@@ -556,34 +511,16 @@ fn draw_remote_connect(frame: &mut Frame, app: &App) {
                 .wrap(Wrap { trim: true }),
             status_area,
         );
-    } else {
-        let note = format!(
-            "neuron mode: {}",
-            match app.neuron_mode {
-                crate::app::NeuronMode::Manual  => "manual".into(),
-                crate::app::NeuronMode::Smart   => "smart".into(),
-                crate::app::NeuronMode::Presets => app.active_preset
-                    .as_deref()
-                    .map(|p| format!("preset:{p}"))
-                    .unwrap_or_else(|| "presets".into()),
-            }
-        );
-        frame.render_widget(
-            Paragraph::new(Span::styled(note, Style::default().fg(DIM))),
-            status_area,
-        );
     }
 
     render_hints(frame, hints_area, vec![
         hint("Enter", "connect"),
         Span::raw("  "),
-        hint("Alt+←/→", "mode"),
-        Span::raw("  "),
         hint("Esc", "back"),
         Span::raw("  "),
         hint("Tab", "settings"),
         Span::raw("  "),
-        hint("Ctrl+←/→", "word jump"),
+        hint("Ctrl+←/→", "word"),
     ]);
 }
 
@@ -592,7 +529,7 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
     let (title_area, content_area, hints_area) = page_layout(area);
-    render_title(frame, title_area);
+    render_title(frame, title_area, app);
 
     // split content: search input · model list
     let content_chunks = Layout::default()

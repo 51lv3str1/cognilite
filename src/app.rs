@@ -27,11 +27,6 @@ pub enum Screen {
     Chat,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum RemoteConnectMode {
-    OllamaUrl,  // remote model, local execution
-    WebSocket,  // remote model + remote execution (cognilite server)
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CtxStrategy {
@@ -355,15 +350,13 @@ pub struct App {
     // background model fetch triggered by switch_to_local()
     pub local_models_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
     // remote connect screen state
-    pub remote_connect_mode: RemoteConnectMode,
-    pub remote_url: String,       // WS URL input
+    pub remote_url: String,
     pub remote_url_cursor: usize,
-    pub remote_ollama_url: String, // Ollama URL input
-    pub remote_ollama_cursor: usize,
     pub remote_connecting: bool,
     pub remote_connect_error: Option<String>,
     pub remote_connect_rx: Option<mpsc::Receiver<Result<(std::net::TcpStream, mpsc::Receiver<crate::ws_client::WsClientFrame>), String>>>,
     pub remote_ollama_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
+    pub remote_label: Option<String>, // shown in title bar when connected remotely
 }
 
 impl App {
@@ -465,15 +458,13 @@ impl App {
             ws_tx: None,
             ws_rx: None,
             local_models_rx: None,
-            remote_connect_mode: RemoteConnectMode::OllamaUrl,
             remote_url: String::new(),
             remote_url_cursor: 0,
-            remote_ollama_url: String::new(),
-            remote_ollama_cursor: 0,
             remote_connecting: false,
             remote_connect_error: None,
             remote_connect_rx: None,
             remote_ollama_rx: None,
+            remote_label: None,
         }
     }
 
@@ -1530,6 +1521,7 @@ impl App {
         }
         self.ws_tx = None;
         self.ws_rx = None;
+        self.remote_label = None;
 
         // reset to model select state
         self.screen = Screen::ModelSelect;
@@ -1599,6 +1591,7 @@ impl App {
     pub fn start_remote_connect(&mut self) {
         self.remote_connecting = true;
         self.remote_connect_error = None;
+        self.remote_label = Some(format!("remote session · {}", self.remote_url.trim()));
         let ws_url = self.remote_ws_url();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -1609,14 +1602,14 @@ impl App {
 
     /// Switch to a remote Ollama URL (remote model, local execution).
     pub fn start_remote_ollama(&mut self) {
-        let url = self.remote_ollama_url.trim().to_string();
-        // normalise: add scheme if missing
+        let url = self.remote_url.trim().to_string();
         let base_url = if url.starts_with("http://") || url.starts_with("https://") {
-            url
+            url.clone()
         } else {
             format!("http://{url}")
         };
         self.base_url = base_url.clone();
+        self.remote_label = Some(format!("remote ollama · {base_url}"));
         self.remote_connecting = true;
         self.remote_connect_error = None;
 

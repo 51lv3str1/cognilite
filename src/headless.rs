@@ -157,10 +157,11 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool) -> i32 {
                             if !t.is_empty() {
                                 if show_thinking {
                                     if !thinking_open {
-                                        eprintln!("[thinking]");
+                                        println!("[thinking]");
                                         thinking_open = true;
                                     }
-                                    eprint!("{t}");
+                                    print!("{t}");
+                                    let _ = std::io::stdout().flush();
                                 }
                                 last.thinking.push_str(t);
                             }
@@ -321,7 +322,7 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool) -> i32 {
             }
 
             if chunk.done {
-                if thinking_open { eprintln!("\n[/thinking]"); }
+                if thinking_open { println!("\n[/thinking]"); }
                 println!();
                 if let (Some(pt), Some(et), Some(ed)) = (
                     chunk.prompt_eval_count, chunk.eval_count, chunk.eval_duration,

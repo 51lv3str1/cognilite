@@ -416,9 +416,17 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                             last.content = last.content.trim_end().to_string();
                         }
                     }
-                    if !send_json(stream, serde_json::json!({"type":"tool","content":&call})) { return false; }
                     eprintln!("[ws tool: {call}]");
                     app.handle_tool_call(&call);
+                    // send after execution so the frame includes the result
+                    let (label, result) = app.messages.last()
+                        .filter(|m| m.role == Role::Tool)
+                        .map(|m| (m.tool_call.clone().unwrap_or_else(|| call.clone()), m.content.as_str()))
+                        .map(|(l, r)| (l, r.to_string()))
+                        .unwrap_or_else(|| (call.clone(), String::new()));
+                    if !send_json(stream, serde_json::json!({
+                        "type": "tool", "command": &call, "label": label, "result": result
+                    })) { return false; }
                     continue 'outer;
                 }
 

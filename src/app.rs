@@ -341,6 +341,9 @@ pub struct App {
     pub highlight_cache: HashMap<PathBuf, (std::time::SystemTime, Vec<Line<'static>>)>,
     // neurons injected on-demand in the current conversation (Smart mode)
     pub injected_neurons: std::collections::HashSet<String>,
+    // remote WebSocket client connection (--remote mode)
+    pub ws_tx: Option<std::net::TcpStream>,
+    pub ws_rx: Option<mpsc::Receiver<crate::ws_client::WsClientFrame>>,
 }
 
 impl App {
@@ -439,6 +442,8 @@ impl App {
             file_panel_attachment: None,
             highlight_cache: HashMap::new(),
             injected_neurons: std::collections::HashSet::new(),
+            ws_tx: None,
+            ws_rx: None,
         }
     }
 
@@ -613,6 +618,64 @@ impl App {
         self.completion = None;
         self.chat_focus = ChatFocus::Input;
 
+        // ── Remote WS path ───────────────────────────────────────────────
+        if self.ws_tx.is_some() {
+            // extract @path refs for the server; keep the rest as the visible message
+            let (text, attach_paths) = split_at_paths(&raw);
+            let content = if text.is_empty() { raw.clone() } else { text };
+
+            // build local display (no file reading — files live on the server)
+            let attachments: Vec<Attachment> = attach_paths.iter().map(|p| {
+                let path = std::path::Path::new(p);
+                Attachment {
+                    filename: path.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| p.clone()),
+                    path: PathBuf::from(p),
+                    kind: AttachmentKind::Text,
+                    size: 0,
+                }
+            }).collect();
+
+            self.messages.push(Message {
+                role: Role::User,
+                content: raw.clone(),
+                llm_content: raw.clone(),
+                images: vec![],
+                attachments,
+                thinking: String::new(),
+                thinking_secs: None,
+                stats: None,
+                tool_call: None,
+            });
+            // empty assistant placeholder
+            self.messages.push(Message {
+                role: Role::Assistant,
+                content: String::new(),
+                llm_content: String::new(),
+                images: vec![],
+                attachments: vec![],
+                thinking: String::new(),
+                thinking_secs: None,
+                stats: None,
+                tool_call: None,
+            });
+            self.auto_scroll = true;
+            self.stream_state = StreamState::Streaming;
+            self.stream_started_at = Some(std::time::Instant::now());
+            self.thinking_end_secs = None;
+
+            if let Some(ref mut tx) = self.ws_tx {
+                crate::ws_client::send_json(tx, serde_json::json!({
+                    "type": "message",
+                    "content": content,
+                    "attach": attach_paths,
+                }));
+            }
+            return;
+        }
+
+        // ── Local Ollama path ────────────────────────────────────────────
         let diff_note = self.collect_pinned_diffs();
 
         let (display, mut llm_content, attachments, images) =
@@ -641,6 +704,7 @@ impl App {
         self.auto_scroll = true;
         self.start_stream();
     }
+
 
     /// Pushes an empty assistant placeholder and starts the Ollama stream
     /// from the current message history.
@@ -967,7 +1031,233 @@ impl App {
         }
     }
 
+    /// Poll incoming frames from a remote WebSocket server and update TUI state.
+    /// Returns after consuming all immediately available frames, or after a control
+    /// frame (Ask/Patch/Done/Error) that requires a state change.
+    pub fn poll_ws(&mut self) {
+        let rx = match self.ws_rx.take() {
+            Some(r) => r,
+            None => return,
+        };
+        loop {
+            match rx.try_recv() {
+                Ok(frame) => {
+                    let keep_alive = self.handle_ws_frame(frame);
+                    if !keep_alive {
+                        // connection dead — don't put rx back
+                        return;
+                    }
+                    // stop this batch on control frames (Ask/Patch/Done/Error)
+                    // detected by stream_state having changed to non-Streaming
+                    if self.stream_state != StreamState::Streaming {
+                        self.ws_rx = Some(rx);
+                        return;
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => { self.ws_rx = Some(rx); return; }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.stream_state = StreamState::Error("Remote server disconnected".to_string());
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Process one WsClientFrame. Returns false if the connection is dead (ws_rx should not
+    /// be restored), true otherwise.
+    fn handle_ws_frame(&mut self, frame: crate::ws_client::WsClientFrame) -> bool {
+        use crate::ws_client::WsClientFrame as F;
+        match frame {
+            F::Connected { model, .. } => {
+                self.selected_model = Some(model);
+                // warmup/connecting phase is over; allow input
+                if self.stream_state == StreamState::Streaming {
+                    self.stream_state = StreamState::Idle;
+                }
+            }
+            F::WarmupStart | F::WarmupDone | F::Unknown => {}
+
+            F::Token(s) => {
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == Role::Assistant {
+                        if !s.is_empty()
+                            && last.content.is_empty()
+                            && !last.thinking.is_empty()
+                            && self.thinking_end_secs.is_none()
+                        {
+                            self.thinking_end_secs = self.stream_started_at
+                                .map(|t| t.elapsed().as_secs_f64());
+                        }
+                        last.content.push_str(&s);
+                        last.llm_content.push_str(&s);
+                    }
+                }
+            }
+            F::ThinkingStart => {}
+            F::Thinking(s) => {
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == Role::Assistant {
+                        last.thinking.push_str(&s);
+                    }
+                }
+            }
+            F::ThinkingEnd => {
+                if self.thinking_end_secs.is_none() {
+                    self.thinking_end_secs = self.stream_started_at.map(|t| t.elapsed().as_secs_f64());
+                }
+            }
+
+            F::Tool { command, label, result } => {
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == Role::Assistant {
+                        last.thinking_secs = self.thinking_end_secs
+                            .or_else(|| self.stream_started_at.map(|t| t.elapsed().as_secs_f64()));
+                    }
+                }
+                let label_display = if label.is_empty() { command.clone() } else { label };
+                let fname = command.split_whitespace().nth(1)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| ".".to_string());
+                let size = result.len();
+                self.messages.push(Message {
+                    role: Role::Tool,
+                    content: result.clone(),
+                    llm_content: format!("Tool result:\n{result}"),
+                    images: vec![],
+                    attachments: vec![Attachment {
+                        filename: fname, path: PathBuf::new(),
+                        kind: AttachmentKind::Text, size,
+                    }],
+                    thinking: String::new(), thinking_secs: None, stats: None,
+                    tool_call: Some(label_display),
+                });
+                // new assistant placeholder for the follow-up response
+                self.messages.push(Message {
+                    role: Role::Assistant,
+                    content: String::new(), llm_content: String::new(),
+                    images: vec![], attachments: vec![],
+                    thinking: String::new(), thinking_secs: None, stats: None,
+                    tool_call: None,
+                });
+                self.thinking_end_secs = None;
+                self.stream_started_at = Some(std::time::Instant::now());
+                self.auto_scroll = true;
+            }
+
+            F::LoadNeuron(name) => {
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == Role::Assistant {
+                        last.thinking_secs = self.thinking_end_secs
+                            .or_else(|| self.stream_started_at.map(|t| t.elapsed().as_secs_f64()));
+                    }
+                }
+                let label = format!("Neuron \u{203a} {name}");
+                self.messages.push(Message {
+                    role: Role::Tool,
+                    content: String::new(), llm_content: String::new(),
+                    images: vec![],
+                    attachments: vec![Attachment {
+                        filename: name, path: PathBuf::new(),
+                        kind: AttachmentKind::Text, size: 0,
+                    }],
+                    thinking: String::new(), thinking_secs: None, stats: None,
+                    tool_call: Some(label),
+                });
+                self.messages.push(Message {
+                    role: Role::Assistant,
+                    content: String::new(), llm_content: String::new(),
+                    images: vec![], attachments: vec![],
+                    thinking: String::new(), thinking_secs: None, stats: None,
+                    tool_call: None,
+                });
+                self.thinking_end_secs = None;
+                self.stream_started_at = Some(std::time::Instant::now());
+                self.auto_scroll = true;
+            }
+
+            F::Ask { kind, question, options } => {
+                let ask_kind = match kind.as_str() {
+                    "confirm" => AskKind::Confirm,
+                    "choice"  => AskKind::Choice(options),
+                    _         => AskKind::Text,
+                };
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == Role::Assistant {
+                        last.content = last.content.trim_end().to_string();
+                        last.thinking_secs = self.thinking_end_secs
+                            .or_else(|| self.stream_started_at.map(|t| t.elapsed().as_secs_f64()));
+                    }
+                }
+                self.ask = Some(InputRequest { question, kind: ask_kind });
+                self.ask_cursor = 0;
+                self.stream_state = StreamState::Idle;
+                self.stream_started_at = None;
+                self.thinking_end_secs = None;
+            }
+
+            F::Patch(diff) => {
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == Role::Assistant {
+                        let rendered = format!("```diff\n{}\n```", diff.trim());
+                        if !last.content.is_empty() { last.content.push('\n'); }
+                        last.content.push_str(&rendered);
+                        last.thinking_secs = self.thinking_end_secs
+                            .or_else(|| self.stream_started_at.map(|t| t.elapsed().as_secs_f64()));
+                    }
+                }
+                self.pending_patch = Some(diff);
+                self.ask = Some(InputRequest {
+                    question: "Apply this patch?".to_string(),
+                    kind: AskKind::Confirm,
+                });
+                self.ask_cursor = 0;
+                self.stream_state = StreamState::Idle;
+                self.stream_started_at = None;
+                self.thinking_end_secs = None;
+            }
+
+            F::Mood(emoji) => { self.current_mood = Some(emoji); }
+
+            F::Done { tps, tokens, prompt_eval } => {
+                let wall_secs = self.stream_started_at
+                    .map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == Role::Assistant {
+                        last.stats = Some(TokenStats {
+                            response_tokens:   tokens,
+                            tokens_per_sec:    tps,
+                            thinking_secs:     self.thinking_end_secs,
+                            prompt_eval_count: prompt_eval,
+                            wall_secs,
+                        });
+                    }
+                }
+                self.thinking_end_secs = None;
+                self.stream_state = StreamState::Idle;
+                self.stream_started_at = None;
+            }
+
+            F::Error(e) => {
+                self.stream_state = StreamState::Error(e);
+                self.stream_started_at = None;
+            }
+
+            F::Disconnected => {
+                self.stream_state = StreamState::Error("Remote server disconnected".to_string());
+                self.ws_tx = None;
+                return false; // connection dead — don't restore ws_rx
+            }
+        }
+        true
+    }
+
     pub fn stop_stream(&mut self) {
+        if self.ws_tx.is_some() {
+            // WS mode: can't cancel the server stream; just stop rendering tokens
+            self.stream_state = StreamState::Idle;
+            self.stream_started_at = None;
+            return;
+        }
         self.stream_rx = None; // dropping the receiver makes the sender fail → thread exits
         self.stream_state = StreamState::Idle;
         self.stream_started_at = None;
@@ -1037,6 +1327,49 @@ impl App {
     }
 
     pub fn submit_ask(&mut self, response: String) {
+        // ── Remote WS path: send ask_response frame, wait for server tokens ──
+        if self.ws_tx.is_some() {
+            self.ask = None;
+            self.ask_cursor = 0;
+            self.input.clear();
+            self.cursor_pos = 0;
+            self.auto_scroll = true;
+
+            if let Some(_diff) = self.pending_patch.take() {
+                // patch is applied server-side; just show a local status message
+                let status = if response == "Yes" { "Patch applied on server." } else { "Patch declined." };
+                self.messages.push(Message {
+                    role: Role::Tool,
+                    content: status.to_string(),
+                    llm_content: format!("Patch response: {response}"),
+                    images: vec![], attachments: vec![],
+                    thinking: String::new(), thinking_secs: None, stats: None,
+                    tool_call: Some("⊕ patch".to_string()),
+                });
+            } else {
+                let ask_question = self.ask.as_ref().map(|a| a.question.clone()).unwrap_or_default();
+                let label = if ask_question.is_empty() { "↩ User selection".to_string() }
+                            else { format!("↩ {ask_question}") };
+                self.messages.push(Message {
+                    role: Role::Tool,
+                    content: response.clone(),
+                    llm_content: format!("User response: {response}"),
+                    images: vec![], attachments: vec![],
+                    thinking: String::new(), thinking_secs: None, stats: None,
+                    tool_call: Some(label),
+                });
+            }
+
+            if let Some(ref mut tx) = self.ws_tx {
+                crate::ws_client::send_json(tx, serde_json::json!({
+                    "type": "ask_response", "content": response
+                }));
+            }
+            self.stream_state = StreamState::Streaming;
+            return;
+        }
+
+        // ── Local Ollama path ────────────────────────────────────────────
         // patch confirmation: apply or decline before normal ask handling
         if let Some(diff) = self.pending_patch.take() {
             self.ask = None;
@@ -2242,6 +2575,21 @@ fn file_kind(path: &Path) -> Option<AttachmentKind> {
     }
     // unknown extension — try as text
     Some(AttachmentKind::Text)
+}
+
+///// Splits `@path` tokens out of user input.
+/// Returns (text_without_at_refs, vec_of_paths).
+/// Used in WS client mode where file reading happens on the server.
+pub fn split_at_paths(raw: &str) -> (String, Vec<String>) {
+    let mut paths = Vec::new();
+    let mut words = Vec::new();
+    for word in raw.split_whitespace() {
+        if let Some(p) = word.strip_prefix('@') {
+            if !p.is_empty() { paths.push(p.to_string()); continue; }
+        }
+        words.push(word);
+    }
+    (words.join(" "), paths)
 }
 
 /// Parses @references from the input, reads files, and returns:

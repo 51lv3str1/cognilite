@@ -3,6 +3,7 @@ mod clipboard;
 mod headless;
 mod server;
 mod websocket;
+mod ws_client;
 mod synapse;
 mod events;
 mod ollama;
@@ -28,6 +29,33 @@ fn main() -> Result<()> {
 
     if let Some((host, port, thinking)) = parse_server_args(&argv) {
         server::run(&ollama_url, &host, port, thinking);
+        return Ok(());
+    }
+
+    if let Some(ws_url) = parse_remote_arg(&argv) {
+        match ws_client::connect(&ws_url) {
+            Err(e) => {
+                eprintln!("cognilite: --remote connection failed: {e}");
+                std::process::exit(1);
+            }
+            Ok((tx, rx)) => {
+                color_eyre::install()?;
+                ratatui::run(|terminal| {
+                    crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
+                    let mut app = App::new(ollama_url.clone());
+                    App::prewarm_highlight();
+                    app.ws_tx = Some(tx);
+                    app.ws_rx = Some(rx);
+                    app.selected_model = Some("connecting…".to_string());
+                    app.screen = app::Screen::Chat;
+                    // show "connecting" spinner until Connected frame arrives
+                    app.stream_state = app::StreamState::Streaming;
+                    let result = run_loop(terminal, &mut app);
+                    let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+                    result
+                })?;
+            }
+        }
         return Ok(());
     }
 
@@ -130,6 +158,41 @@ fn parse_headless_args(argv: &[String]) -> Option<headless::HeadlessArgs> {
     Some(ha)
 }
 
+/// Returns the WS URL if --remote <url> is present, with any extra flags appended as query params.
+fn parse_remote_arg(argv: &[String]) -> Option<String> {
+    let pos = argv.iter().position(|a| a == "--remote")?;
+    let mut url = argv.get(pos + 1)?.clone();
+    // append supported per-session query params from remaining flags
+    let mut params: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--thinking" => params.push("thinking=true".into()),
+            "--yes" | "-y" => params.push("yes=true".into()),
+            "--model" | "-m" => {
+                i += 1;
+                if i < argv.len() { params.push(format!("model={}", argv[i])); }
+            }
+            "--preset" => {
+                i += 1;
+                if i < argv.len() { params.push(format!("preset={}", argv[i])); }
+            }
+            "--neuron-mode" => {
+                i += 1;
+                if i < argv.len() { params.push(format!("neuron_mode={}", argv[i])); }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if !params.is_empty() {
+        let sep = if url.contains('?') { '&' } else { '?' };
+        url.push(sep);
+        url.push_str(&params.join("&"));
+    }
+    Some(url)
+}
+
 fn load_models(app: &mut App) {
     match ollama::list_models(&app.base_url) {
         Ok(entries) => {
@@ -147,6 +210,7 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> color_eyr
     loop {
         app.poll_warmup();
         app.poll_stream();
+        app.poll_ws();
         app.poll_highlight();
         app.check_pinned_files();
         app.check_file_panel();

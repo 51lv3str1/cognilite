@@ -344,6 +344,8 @@ pub struct App {
     // remote WebSocket client connection (--remote mode)
     pub ws_tx: Option<std::net::TcpStream>,
     pub ws_rx: Option<mpsc::Receiver<crate::ws_client::WsClientFrame>>,
+    // background model fetch triggered by switch_to_local()
+    pub local_models_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
 }
 
 impl App {
@@ -444,6 +446,7 @@ impl App {
             injected_neurons: std::collections::HashSet::new(),
             ws_tx: None,
             ws_rx: None,
+            local_models_rx: None,
         }
     }
 
@@ -1434,6 +1437,58 @@ impl App {
         self.ask_cursor = 0;
         self.input.clear();
         self.cursor_pos = 0;
+    }
+
+    /// Disconnect from a remote WS session and reload local models so the
+    /// model select screen works exactly as if the app had started normally.
+    pub fn switch_to_local(&mut self) {
+        // close WS connection
+        if let Some(ref mut tx) = self.ws_tx {
+            let _ = crate::ws_client::write_frame(tx, 8, &[]); // opcode 8 = CLOSE
+        }
+        self.ws_tx = None;
+        self.ws_rx = None;
+
+        // reset to model select state
+        self.screen = Screen::ModelSelect;
+        self.stream_state = StreamState::Idle;
+        self.stream_rx = None;
+        self.models = Vec::new();
+        self.models_error = None;
+        self.loading_models = true;
+        self.selected_model = None;
+
+        // fetch local models in background so the UI stays responsive
+        let base_url = self.base_url.clone();
+        let (tx, rx) = mpsc::channel::<Result<Vec<crate::ollama::ModelEntry>, String>>();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::ollama::list_models(&base_url));
+        });
+        // store receiver so poll_local_models() can pick it up
+        self.local_models_rx = Some(rx);
+    }
+
+    pub fn poll_local_models(&mut self) {
+        let rx = match self.local_models_rx.take() {
+            Some(r) => r,
+            None => return,
+        };
+        match rx.try_recv() {
+            Ok(Ok(entries)) => {
+                self.models = entries;
+                self.loading_models = false;
+            }
+            Ok(Err(e)) => {
+                self.models_error = Some(e);
+                self.loading_models = false;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.local_models_rx = Some(rx); // not done yet
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.loading_models = false;
+            }
+        }
     }
 
     pub fn clear_chat(&mut self) {

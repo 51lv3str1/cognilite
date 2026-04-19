@@ -302,6 +302,7 @@ pub struct App {
     pub stream_rx: Option<mpsc::Receiver<StreamChunk>>,
     pub warmup_rx: Option<mpsc::Receiver<()>>,
     pub warmup_started_at: Option<std::time::Instant>,
+    pub ws_warmup_started_at: Option<std::time::Instant>, // remote warmup (WS mode)
     pub warmup_prompt_tokens: Option<u64>,
     pub warmup_last_hash: Option<u64>,     // hash of the system prompt used in the last warmup
     pub stream_started_at: Option<std::time::Instant>,
@@ -402,6 +403,7 @@ impl App {
             stream_rx: None,
             warmup_rx: None,
             warmup_started_at: None,
+            ws_warmup_started_at: None,
             warmup_prompt_tokens: None,
             warmup_last_hash: None,
             stream_started_at: None,
@@ -627,7 +629,7 @@ impl App {
         if let Some(ref mut tx) = self.ws_tx {
             crate::ws_client::send_json(tx, serde_json::json!({"type":"select_model","model":name}));
         }
-        self.selected_model = Some("connecting…".to_string());
+        self.selected_model = Some(name);
         self.messages.clear();
         self.input.clear();
         self.cursor_pos = 0;
@@ -1134,7 +1136,9 @@ impl App {
                     self.stream_state = StreamState::Idle;
                 }
             }
-            F::WarmupStart | F::WarmupDone | F::Unknown => {}
+            F::WarmupStart => { self.ws_warmup_started_at = Some(std::time::Instant::now()); }
+            F::WarmupDone  => { self.ws_warmup_started_at = None; }
+            F::Unknown => {}
 
             F::Token(s) => {
                 if let Some(last) = self.messages.last_mut() {
@@ -1522,6 +1526,7 @@ impl App {
         self.ws_tx = None;
         self.ws_rx = None;
         self.remote_label = None;
+        self.ws_warmup_started_at = None;
 
         // reset to model select state
         self.screen = Screen::ModelSelect;

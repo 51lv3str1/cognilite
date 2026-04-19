@@ -685,7 +685,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     // +2 for borders; account for visual wrapping (area.width - 4 = borders(2) + prefix(2))
     let input_inner_width = area.width.saturating_sub(4);
     let input_height = (visual_line_count(&app.input, input_inner_width) + 2).min(10);
-    let warming_up = app.warmup_rx.is_some();
+    let warming_up = app.warmup_rx.is_some() || app.ws_warmup_started_at.is_some();
     let (ask_height, hide_input) = match &app.ask {
         None => (0u16, false),
         Some(r) => match &r.kind {
@@ -1103,7 +1103,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     };
     // --- warmup status bar ---
     if warming_up {
-        if let Some(started) = app.warmup_started_at {
+        if let Some(started) = app.ws_warmup_started_at.or(app.warmup_started_at) {
             let elapsed = started.elapsed().as_secs_f64();
             const SPINNER: &[&str] = &["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
             let frame_i = (elapsed / 0.1) as usize % SPINNER.len();

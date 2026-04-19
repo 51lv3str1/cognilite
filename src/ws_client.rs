@@ -89,7 +89,7 @@ fn b64(data: &[u8]) -> String {
 // ── Connection ────────────────────────────────────────────────────────────
 
 /// Connect to a cognilite WebSocket server.
-/// url must start with "ws://", e.g. "ws://host:8765/ws?model=qwen2.5:7b"
+/// url must start with "ws://", e.g. "ws://host:8765"
 pub fn connect(url: &str) -> Result<(TcpStream, mpsc::Receiver<WsClientFrame>), String> {
     let rest = url.strip_prefix("ws://").ok_or("URL must start with ws://")?;
     let (hostport, path_rest) = rest.split_once('/').unwrap_or((rest, "ws"));

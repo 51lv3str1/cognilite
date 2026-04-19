@@ -497,7 +497,7 @@ fn draw_remote_connect(frame: &mut Frame, app: &App) {
     let (label_text, placeholder) = if is_ollama {
         ("Ollama URL  (remote model, local execution)", "http://host:11434")
     } else {
-        ("WebSocket URL  (remote model + remote execution)", "ws://host:8765/ws")
+        ("WebSocket URL  (remote model + remote execution)", "ws://host:8765")
     };
 
     let label_area = Rect { y: inner.y + 3, height: 1, ..inner };

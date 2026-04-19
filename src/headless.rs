@@ -184,6 +184,10 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool, show_thin
                     if last.role == Role::Assistant {
                         let safe = safe_print_boundary(&last.content, printed_up_to);
                         if safe > printed_up_to {
+                            if thinking_open {
+                                println!("\n[/thinking]");
+                                thinking_open = false;
+                            }
                             print!("{}", &last.content[printed_up_to..safe]);
                             let _ = std::io::stdout().flush();
                             printed_up_to = safe;

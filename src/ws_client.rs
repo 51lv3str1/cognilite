@@ -17,6 +17,7 @@ pub enum WsClientFrame {
     Ask { kind: String, question: String, options: Vec<String> },
     Patch(String),
     Mood(String),
+    FilePreview { path: String, content: String },
     Done { tps: f64, tokens: u64, prompt_eval: u64 },
     WarmupStart,
     WarmupDone,
@@ -181,6 +182,10 @@ fn parse_frame(val: serde_json::Value) -> WsClientFrame {
 
         Some("patch")  => WsClientFrame::Patch(s("diff")),
         Some("mood")   => WsClientFrame::Mood(s("emoji")),
+        Some("file_preview") => WsClientFrame::FilePreview {
+            path:    s("path"),
+            content: s("content"),
+        },
 
         Some("done") => {
             let st = val.get("stats");

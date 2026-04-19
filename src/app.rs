@@ -1255,6 +1255,10 @@ impl App {
 
             F::Mood(emoji) => { self.current_mood = Some(emoji); }
 
+            F::FilePreview { path, content } => {
+                self.open_file_panel_remote(&path, &content);
+            }
+
             F::Done { tps, tokens, prompt_eval } => {
                 let wall_secs = self.stream_started_at
                     .map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
@@ -1805,6 +1809,18 @@ impl App {
             self.highlight_cache.insert(path.clone(), (mt, lines.clone()));
         }
         self.file_panel = Some(FilePanel { path, display_path, lines, scroll: 0, mtime, reloaded_at: None });
+        self.file_panel_visible = true;
+    }
+
+    /// Open the file panel from content delivered over WS (no local disk read).
+    pub fn open_file_panel_remote(&mut self, path_str: &str, content: &str) {
+        let path = PathBuf::from(path_str);
+        let display_path = path.to_string_lossy().to_string();
+        let lines = highlight_content(content, &path);
+        self.file_panel = Some(FilePanel {
+            path, display_path, lines, scroll: 0,
+            mtime: None, reloaded_at: None,
+        });
         self.file_panel_visible = true;
     }
 
@@ -2710,13 +2726,18 @@ fn highlight_file(path: &Path) -> Vec<Line<'static>> {
             Style::default().fg(Color::DarkGray),
         ))],
     };
+    highlight_content(&content, path)
+}
+
+/// Highlight `content` using `path_hint` only for syntax detection (no disk read).
+pub fn highlight_content(content: &str, path_hint: &Path) -> Vec<Line<'static>> {
     let ss = SYNTAX_SET.get_or_init(|| two_face::syntax::extra_newlines());
     let ts = THEME_SET.get_or_init(ThemeSet::load_defaults);
     let theme = &ts.themes["base16-ocean.dark"];
-    let syntax = ss.find_syntax_for_file(path).ok().flatten()
+    let syntax = ss.find_syntax_for_file(path_hint).ok().flatten()
         .unwrap_or_else(|| ss.find_syntax_plain_text());
     let mut h = HighlightLines::new(syntax, theme);
-    LinesWithEndings::from(&content).enumerate().take(500).map(|(i, line)| {
+    LinesWithEndings::from(content).enumerate().take(500).map(|(i, line)| {
         let ranges = h.highlight_line(line, ss).unwrap_or_default();
         let mut spans = vec![Span::styled(
             format!("{:4} ", i + 1),
@@ -2974,6 +2995,24 @@ fn apply_patch(diff: &str, working_dir: &std::path::Path) -> String {
 }
 
 /// Detects a complete `<mood>...</mood>` tag outside think blocks. Returns the emoji string.
+/// Extract path from `<preview path="..."/>` tag (outside think blocks).
+pub fn extract_preview_tag(content: &str) -> Option<String> {
+    let scan = match content.rfind("</think>") {
+        Some(i) => &content[i + 8..],
+        None => {
+            if content.contains("<think>") { return None; }
+            content
+        }
+    };
+    let start = scan.find("<preview")?;
+    let tag_str = &scan[start..];
+    let end = tag_str.find("/>")?;
+    let inner = &tag_str[8..end]; // skip "<preview"
+    let path_start = inner.find("path=\"")? + 6;
+    let path_end = inner[path_start..].find('"')? + path_start;
+    Some(inner[path_start..path_end].to_string())
+}
+
 pub fn extract_mood_tag(content: &str) -> Option<String> {
     let scan = match content.rfind("</think>") {
         Some(i) => &content[i + 8..],

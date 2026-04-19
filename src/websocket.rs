@@ -7,7 +7,7 @@ use std::sync::mpsc::TryRecvError;
 use crate::app::{
     App, AskKind, Attachment, AttachmentKind, Message, NeuronMode, Role, StreamState,
     extract_ask_tag, extract_load_neuron_tag, extract_mood_tag, extract_patch_tag,
-    extract_tool_call, build_runtime_context, RuntimeMode,
+    extract_preview_tag, extract_tool_call, build_runtime_context, RuntimeMode,
 };
 use crate::headless::safe_print_boundary;
 
@@ -613,6 +613,32 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                     }
                     app.current_mood = Some(emoji.clone());
                     send_json(stream, serde_json::json!({"type":"mood","emoji":emoji}));
+                }
+
+                // ── <preview path="..."/> ───────────────────────────────
+                let preview_path = app.messages.last()
+                    .filter(|m| m.role == Role::Assistant)
+                    .and_then(|m| extract_preview_tag(&m.content));
+                if let Some(rel_path) = preview_path {
+                    if let Some(last) = app.messages.last_mut() {
+                        let sf = last.content.rfind("</think>").map(|i| i + 8).unwrap_or(0);
+                        if let Some(p) = last.content[sf..].find("<preview") {
+                            let abs = sf + p;
+                            if let Some(end) = last.content[abs..].find("/>") {
+                                let tag_end = abs + end + 2;
+                                let before = last.content[..abs].trim_end().to_string();
+                                last.content = before + &last.content[tag_end..];
+                            }
+                        }
+                    }
+                    let file_path = app.working_dir.join(&rel_path);
+                    let content = std::fs::read_to_string(&file_path)
+                        .unwrap_or_else(|e| format!("(cannot read {rel_path}: {e})"));
+                    send_json(stream, serde_json::json!({
+                        "type": "file_preview",
+                        "path": rel_path,
+                        "content": content
+                    }));
                 }
             }
 

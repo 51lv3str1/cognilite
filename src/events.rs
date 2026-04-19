@@ -432,6 +432,9 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
         KeyCode::Esc => {
             if app.stream_state == StreamState::Streaming {
                 app.stop_stream();
+            } else if app.ws_tx.is_some() {
+                // remote TUI mode: no local model list — Esc quits instead
+                app.should_quit = true;
             } else {
                 app.stream_rx = None;
                 app.screen = Screen::ModelSelect;

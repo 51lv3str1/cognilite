@@ -107,7 +107,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
         .split(content_area);
 
     // ── Tab bar ───────────────────────────────────────────────────────────────
-    let tabs = ["Context", "Neurons", "Generation", "Performance"];
+    let tabs = ["Context", "Neurons", "Generation", "Performance", "Features"];
     let mut tab_spans: Vec<Span> = Vec::new();
     for (i, name) in tabs.iter().enumerate() {
         if i > 0 { tab_spans.push(Span::styled("  ·  ", Style::default().fg(THINKING_COLOR))); }
@@ -369,14 +369,13 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
             }
         }
-        _ => {
+        3 => {
             // ── Performance ───────────────────────────────────────────────────
             struct PerfOption<'a> { label: &'a str, desc: &'a str, value: bool }
             let perf_options = [
-                PerfOption { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache",  value: app.ctx_pow2   },
-                PerfOption { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",   value: app.keep_alive },
-                PerfOption { label: "Warm-up cache",    desc: "Pre-fill KV cache with the system prompt on model load",     value: app.warmup     },
-                PerfOption { label: "Thinking",         desc: "Enable extended thinking for supported models (think: true)", value: app.thinking   },
+                PerfOption { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache", value: app.ctx_pow2   },
+                PerfOption { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",  value: app.keep_alive },
+                PerfOption { label: "Warm-up cache",    desc: "Pre-fill KV cache with the system prompt on model load",    value: app.warmup     },
             ];
             let filtered: Vec<(usize, &PerfOption)> = perf_options.iter().enumerate()
                 .filter(|(_, o)| crate::app::fuzzy_match(&app.config_search, o.label))
@@ -394,11 +393,35 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
             }
         }
+        _ => {
+            // ── Features ──────────────────────────────────────────────────────
+            struct FeatureOption<'a> { label: &'a str, desc: &'a str, value: bool }
+            let feature_options = [
+                FeatureOption { label: "Thinking", desc: "Enable extended thinking for supported models (think: true)", value: app.thinking },
+            ];
+            let filtered: Vec<(usize, &FeatureOption)> = feature_options.iter().enumerate()
+                .filter(|(_, o)| crate::app::fuzzy_match(&app.config_search, o.label))
+                .collect();
+            for (row, (orig_idx, opt)) in filtered.iter().enumerate() {
+                let cursor = *orig_idx == app.features_cursor;
+                let (marker, circle_fg) = if opt.value { ("●", ACCENT) } else { ("○", DIM) };
+                let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+                let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
+                let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+                frame.render_widget(Paragraph::new(Line::from(vec![
+                    Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
+                    Span::styled(opt.label, name_style),
+                    Span::styled(format!("  —  {}", opt.desc), desc_style),
+                ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
+            }
+        }
     }
 
     // ── Hints ─────────────────────────────────────────────────────────────────
     let action_hint: Vec<Span> = if app.config_section == 2 {
         vec![hint("←/→", "adjust"), Span::raw("  "), hint("r", "reset")]
+    } else if app.config_section == 0 {
+        vec![hint("Enter", "confirm")]
     } else {
         vec![hint("Enter", "toggle")]
     };
@@ -426,6 +449,9 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 ("r",             "Reset to default"),
             ]),
             ("Performance", &[
+                ("Enter / Space", "Toggle on / off"),
+            ]),
+            ("Features", &[
                 ("Enter / Space", "Toggle on / off"),
             ]),
         ];

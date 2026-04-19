@@ -284,6 +284,7 @@ pub struct App {
     pub warmup: bool,
     pub thinking: bool,
     pub perf_cursor: usize,
+    pub features_cursor: usize,
     pub config_search: String,  // filter query for all config sections
     // model select
     pub models: Vec<ModelEntry>,
@@ -388,6 +389,7 @@ impl App {
             warmup: cfg.warmup,
             thinking: cfg.thinking,
             perf_cursor: 0,
+            features_cursor: 0,
             config_search: String::new(),
             models: Vec::new(),
             model_cursor: 0,
@@ -517,7 +519,14 @@ impl App {
             0 => self.ctx_pow2   = !self.ctx_pow2,
             1 => self.keep_alive = !self.keep_alive,
             2 => self.warmup     = !self.warmup,
-            3 => self.thinking   = !self.thinking,
+            _ => {}
+        }
+        self.save_config();
+    }
+
+    pub fn toggle_feature(&mut self, index: usize) {
+        match index {
+            0 => self.thinking = !self.thinking,
             _ => {}
         }
         self.save_config();

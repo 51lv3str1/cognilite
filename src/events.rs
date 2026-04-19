@@ -76,7 +76,7 @@ fn handle_config(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => { app.toggle_config(); return; }
         KeyCode::Tab => {
-            app.config_section = (app.config_section + 1) % 4;
+            app.config_section = (app.config_section + 1) % 5;
             app.config_search.clear();
             return;
         }
@@ -225,7 +225,7 @@ fn handle_config(app: &mut App, key: KeyEvent) {
             }
             _ => {}
         }
-    } else {
+    } else if app.config_section == 3 {
         const PERF_LABELS: &[&str] = &["Stable num_ctx", "Keep model alive", "Warm-up cache"];
         let filtered: Vec<usize> = PERF_LABELS.iter().enumerate()
             .filter(|(_, l)| fuzzy_match(&app.config_search, l))
@@ -242,6 +242,26 @@ fn handle_config(app: &mut App, key: KeyEvent) {
                     .filter(|(_, l)| fuzzy_match(&app.config_search, l))
                     .map(|(i, _)| i).collect();
                 snap_cursor(&mut app.perf_cursor, &new_filtered);
+            }
+            _ => {}
+        }
+    } else {
+        const FEATURE_LABELS: &[&str] = &["Thinking"];
+        let filtered: Vec<usize> = FEATURE_LABELS.iter().enumerate()
+            .filter(|(_, l)| fuzzy_match(&app.config_search, l))
+            .map(|(i, _)| i)
+            .collect();
+        match key.code {
+            KeyCode::Up   => nav_prev(&mut app.features_cursor, &filtered),
+            KeyCode::Down => nav_next(&mut app.features_cursor, &filtered),
+            KeyCode::Enter | KeyCode::Char(' ') => app.toggle_feature(app.features_cursor),
+            KeyCode::Backspace => { app.config_search.pop(); }
+            KeyCode::Char(c) => {
+                app.config_search.push(c);
+                let new_filtered: Vec<usize> = FEATURE_LABELS.iter().enumerate()
+                    .filter(|(_, l)| fuzzy_match(&app.config_search, l))
+                    .map(|(i, _)| i).collect();
+                snap_cursor(&mut app.features_cursor, &new_filtered);
             }
             _ => {}
         }

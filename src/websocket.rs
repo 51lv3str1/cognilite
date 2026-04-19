@@ -338,17 +338,13 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                         last.llm_content.push_str(&msg.content);
                         if let Some(ref t) = msg.thinking {
                             if !t.is_empty() {
-                                if thinking {
-                                    if !thinking_open {
-                                        if !send_json(stream, serde_json::json!({"type":"thinking_start"})) { return false; }
-                                        thinking_open = true;
-                                    }
-                                    if !send_json(stream, serde_json::json!({"type":"thinking","content":t})) { return false; }
+                                if !thinking_open {
+                                    if thinking { if !send_json(stream, serde_json::json!({"type":"thinking_start"})) { return false; } }
+                                    if thinking_srv { eprint!("[thinking]\n"); }
+                                    thinking_open = true;
                                 }
-                                if thinking_srv {
-                                    if !thinking_open { eprint!("[thinking]\n"); }
-                                    eprint!("{t}");
-                                }
+                                if thinking { if !send_json(stream, serde_json::json!({"type":"thinking","content":t})) { return false; } }
+                                if thinking_srv { eprint!("{t}"); }
                                 last.thinking.push_str(t);
                             }
                         }

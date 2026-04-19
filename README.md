@@ -106,11 +106,14 @@ cognilite --headless --temperature 0.2 --top-p 0.9 "write a haiku"
 
 # auto-confirm all <ask type="confirm"> prompts
 cognilite --headless --yes "clean up the tmp files"
+
+# stream thinking process to stdout
+cognilite --headless --thinking "why is the sky blue?"
 ```
 
 **Output:** response tokens stream to stdout; status messages (model, tool calls, neuron loads, stats) go to stderr. Exit code 0 on success, 1 on error.
 
-All tags are handled the same as in the TUI: `<tool>` executes commands and restarts the stream, `<load_neuron>` injects on-demand neurons, `<patch>` is applied automatically, `<ask>` reads from stdin (or auto-confirms with `--yes`).
+All tags are handled the same as in the TUI: `<tool>` executes commands and restarts the stream, `<load_neuron>` injects on-demand neurons, `<patch>` is applied automatically, `<ask>` reads interactively from stdin (or auto-confirms with `--yes`).
 
 ### Headless flags
 
@@ -128,6 +131,87 @@ All tags are handled the same as in the TUI: `<tool>` executes commands and rest
 | `--pin <path>` | Pin file into system prompt (repeatable) |
 | `--attach <path>` | Attach file to the message (repeatable) |
 | `--yes` / `-y` | Auto-confirm all `<ask type="confirm">` prompts |
+| `--thinking` | Stream thinking content to stdout (before the response) |
+
+## Server mode
+
+Exposes cognilite as an HTTP server. Each `POST /chat` request spawns a headless session and streams the response back via chunked transfer encoding.
+
+```bash
+# default: listen on 0.0.0.0:8765
+cognilite --server
+
+# custom host and port
+cognilite --server --host 127.0.0.1 --port 9000
+
+# show thinking on the server terminal for every request
+cognilite --server --thinking
+
+# combine with a custom Ollama URL
+cognilite --server --ollama-url http://192.168.1.10:11434
+```
+
+### Sending a request
+
+```bash
+curl -N -X POST http://localhost:8765/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "list the files in src/ with line counts", "model": "gemma4:e2b"}'
+```
+
+The response streams as plain text. `-N` disables curl's output buffering so you see tokens as they arrive.
+
+### JSON body fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `message` | string | **(required)** The user message |
+| `model` | string | Model to use (default: first available) |
+| `neuron_mode` | string | `manual`, `smart`, or `presets` |
+| `preset` | string | Neuron preset name |
+| `ctx_strategy` | string | `dynamic` or `full` |
+| `temperature` | number | Override temperature |
+| `top_p` | number | Override top_p |
+| `repeat_penalty` | number | Override repeat_penalty |
+| `no_neurons` | array | Neuron names to disable |
+| `pin` | array | File paths to pin into the system prompt |
+| `attach` | array | File paths to attach to the message |
+| `keep_alive` | bool | Keep model loaded after response |
+| `yes` | bool | Auto-confirm all `<ask type="confirm">` prompts |
+| `thinking` | bool | Stream thinking content to the client (in the response body) |
+
+### Thinking output
+
+`--thinking` (server flag) and `"thinking": true` (per-request JSON) are independent:
+
+| | Where thinking appears |
+|---|---|
+| `cognilite --server --thinking` | Server terminal (stderr), for all requests |
+| `"thinking": true` in JSON | Client (response body), for that request only |
+
+Both can be active at the same time.
+
+Thinking is wrapped in `[thinking]` / `[/thinking]` markers:
+
+```
+[thinking]
+The user wants to know...
+[/thinking]
+
+Here is the answer...
+```
+
+### Interactive `<ask>` prompts
+
+When the model emits an `<ask>` tag, the prompt is shown on the **server terminal** and the operator types the response there. The client continues receiving the streamed output once the response is submitted.
+
+If the request includes `"yes": true`, all confirmations are auto-accepted without operator input.
+
+> HTTP chunked transfer is unidirectional — there is no way to send mid-stream input from the client side with the current protocol.
+
+### Concurrent requests
+
+Only one session can own the server terminal for interactive input at a time. Concurrent requests are queued and processed in order. Non-interactive requests (those that never trigger `<ask>`, or that use `"yes": true`) are not affected by this in practice.
 
 ## Keybindings
 
@@ -469,9 +553,11 @@ src/
 ├── app.rs         — App state, message types, input editing, tag interception, tool/patch/ask/mood loop,
 │                    file picker/panel/pinned logic, highlight_code/highlight_file (syntect)
 ├── headless.rs    — headless mode: CLI arg struct, stream loop, stdin ask handler
+├── server.rs      — HTTP server mode: TCP listener, per-connection handler, chunked streaming, argv builder
 ├── synapse.rs     — Neuron/Synapse types, directory loader, tool context builder, .toml parser
 ├── events.rs      — key event dispatch (config / model select / chat / history / ask / picker modes)
 ├── ollama.rs      — Ollama API: list_models, fetch_context_length, stream_chat, warmup
+├── clipboard.rs   — clipboard write (OSC 52 / pbcopy / wl-copy / xclip)
 └── ui.rs          — ratatui rendering: config, model select, chat, file picker, file panel, popups
 ```
 

@@ -92,8 +92,19 @@ fn b64(data: &[u8]) -> String {
 /// url must start with "ws://", e.g. "ws://host:8765"
 pub fn connect(url: &str) -> Result<(TcpStream, mpsc::Receiver<WsClientFrame>), String> {
     let rest = url.strip_prefix("ws://").ok_or("URL must start with ws://")?;
-    let (hostport, path_rest) = rest.split_once('/').unwrap_or((rest, "ws"));
-    let path = format!("/{path_rest}");
+    // hostport ends at the first '/' or '?' — the rest is path+query
+    let host_end = rest.find(|c| c == '/' || c == '?').unwrap_or(rest.len());
+    let hostport = &rest[..host_end];
+    let after_host = &rest[host_end..];
+    // path defaults to /ws; query keeps the '?' prefix
+    let (path_part, query_part) = if after_host.starts_with('/') {
+        after_host.split_once('?')
+            .map(|(p, q)| (p, format!("?{q}")))
+            .unwrap_or((after_host, String::new()))
+    } else {
+        ("/ws", after_host.to_string()) // after_host starts with '?' or is empty
+    };
+    let path = format!("{path_part}{query_part}");
 
     let mut stream = TcpStream::connect(hostport)
         .map_err(|e| format!("connect {hostport}: {e}"))?;

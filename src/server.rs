@@ -49,7 +49,7 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, th
         if !crate::websocket::handshake(&mut stream, &key) { return; }
         let query = crate::websocket::parse_query(&full_path);
         let cfg = crate::websocket::SessionConfig::from_query(&query, thinking_server);
-        eprintln!("[ws] {peer} upgrading");
+        eprintln!("[ws] {peer} connected");
         crate::websocket::run_session(stream, &ollama_url, cfg);
         return;
     }

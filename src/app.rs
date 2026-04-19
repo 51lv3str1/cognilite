@@ -78,6 +78,7 @@ pub struct Config {
     pub ctx_pow2: bool,
     pub keep_alive: bool,
     pub warmup: bool,
+    pub thinking: bool,
     pub neuron_mode: NeuronMode,
     pub neuron_presets: Vec<NeuronPreset>,
     pub active_preset: Option<String>,
@@ -87,7 +88,7 @@ pub fn load_config() -> Config {
     let default = Config {
         ctx_strategy: CtxStrategy::Dynamic, disabled_neurons: Default::default(),
         gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2],
-        ctx_pow2: true, keep_alive: false, warmup: true,
+        ctx_pow2: true, keep_alive: false, warmup: true, thinking: true,
         neuron_mode: NeuronMode::Manual, neuron_presets: Vec::new(), active_preset: None,
     };
     let path = match config_path() { Some(p) => p, None => return default };
@@ -107,6 +108,7 @@ pub fn load_config() -> Config {
     let ctx_pow2   = val.get("ctx_pow2").and_then(|v| v.as_bool()).unwrap_or(true);
     let keep_alive = val.get("keep_alive").and_then(|v| v.as_bool()).unwrap_or(false);
     let warmup     = val.get("warmup").and_then(|v| v.as_bool()).unwrap_or(true);
+    let thinking   = val.get("thinking").and_then(|v| v.as_bool()).unwrap_or(true);
     let neuron_mode = val.get("neuron_mode").and_then(|v| v.as_str())
         .map(NeuronMode::from_str).unwrap_or(NeuronMode::Manual);
     let neuron_presets = val.get("neuron_presets").and_then(|v| v.as_array())
@@ -118,7 +120,7 @@ pub fn load_config() -> Config {
         }).collect())
         .unwrap_or_default();
     let active_preset = val.get("active_preset").and_then(|v| v.as_str()).map(String::from);
-    Config { ctx_strategy, disabled_neurons, gen_params, ctx_pow2, keep_alive, warmup, neuron_mode, neuron_presets, active_preset }
+    Config { ctx_strategy, disabled_neurons, gen_params, ctx_pow2, keep_alive, warmup, thinking, neuron_mode, neuron_presets, active_preset }
 }
 
 /// Returns true if the neuron has active tool capabilities (shell passthrough or synapse tools).
@@ -280,6 +282,7 @@ pub struct App {
     pub ctx_pow2: bool,
     pub keep_alive: bool,
     pub warmup: bool,
+    pub thinking: bool,
     pub perf_cursor: usize,
     pub config_search: String,  // filter query for all config sections
     // model select
@@ -383,6 +386,7 @@ impl App {
             ctx_pow2: cfg.ctx_pow2,
             keep_alive: cfg.keep_alive,
             warmup: cfg.warmup,
+            thinking: cfg.thinking,
             perf_cursor: 0,
             config_search: String::new(),
             models: Vec::new(),
@@ -495,6 +499,7 @@ impl App {
             "ctx_pow2":        self.ctx_pow2,
             "keep_alive":      self.keep_alive,
             "warmup":          self.warmup,
+            "thinking":        self.thinking,
             "neuron_mode":     self.neuron_mode.as_str(),
             "neuron_presets":  presets,
             "active_preset":   self.active_preset,
@@ -512,6 +517,7 @@ impl App {
             0 => self.ctx_pow2   = !self.ctx_pow2,
             1 => self.keep_alive = !self.keep_alive,
             2 => self.warmup     = !self.warmup,
+            3 => self.thinking   = !self.thinking,
             _ => {}
         }
         self.save_config();
@@ -806,8 +812,9 @@ impl App {
 
         let gen_params = self.gen_params;
         let keep_alive = self.keep_alive;
+        let thinking   = self.thinking;
         std::thread::spawn(move || {
-            crate::ollama::stream_chat(&base_url, model, chat_messages, num_ctx, gen_params, keep_alive, tx);
+            crate::ollama::stream_chat(&base_url, model, chat_messages, num_ctx, gen_params, keep_alive, thinking, tx);
         });
     }
 

@@ -56,6 +56,7 @@ cognilite  ›  gemma4:e2b  ○  😊  ctx 12% / 128k
 - **Paste support** — multiline paste from clipboard; newlines preserved
 - **Stop generation** — `Esc` while streaming cancels the current response
 - **Settings screen** — four tabs: context strategy, neurons, generation parameters, performance flags; persisted to `~/.config/cognilite/config.json`
+- **Remote TUI mode** — connect to a remote cognilite server over WebSocket (`ws://host:port`) and use the full TUI as if the model were local: model selection, file picker browsing remote directories, `<preview>` tag opens files from the server in the local file panel, warmup spinner, all tag-driven widgets
 - **F1 help popup** — keyboard shortcut reference available on all screens
 
 ## Requirements
@@ -251,18 +252,25 @@ The server sends structured JSON frames back to the client:
 
 | Frame type | When | Fields |
 |------------|------|--------|
+| `connected` | Session ready (after warmup) | `model`, `ctx` |
 | `token` | Each streamed token | `content` |
+| `thinking_start` | Thinking block begins | — |
 | `thinking` | Thinking block content | `content` |
-| `tool_call` | Tool is about to run | `command` |
-| `tool_result` | Tool finished | `output` |
-| `ask` | Model needs input | `prompt`, `ask_type` |
-| `patch_confirm` | Patch waiting for apply | `diff` |
-| `patch_result` | Patch applied/rejected | `status`, `output` |
+| `thinking_end` | Thinking block ends | — |
+| `tool` | Tool executed | `command`, `label`, `result` |
+| `load_neuron` | On-demand neuron injected | `name` |
+| `ask` | Model needs input | `kind`, `question`, `options` |
+| `patch` | Patch ready for apply | `diff` |
+| `mood` | Mood update | `emoji` |
+| `file_preview` | File content for viewer | `path`, `content` |
+| `models` | Available model list (TUI client) | `entries[]` |
+| `ls_result` | Directory listing (TUI client) | `path`, `entries[]` |
 | `warmup_start` | KV cache pre-fill started | — |
 | `warmup_done` | KV cache ready | — |
 | `pinned` | File pinned | `path` |
 | `unpinned` | File unpinned | `path` |
-| `done` | Response finished | `tokens`, `tok_s` |
+| `done` | Response finished | `stats.tps`, `stats.tokens`, `stats.prompt_eval` |
+| `error` | Session error | `content` |
 
 ### Session query parameters
 
@@ -272,15 +280,34 @@ ws://localhost:8765/ws?model=qwen2.5:7b&thinking=true&yes=true&preset=MyPreset
 
 | Parameter | Description |
 |-----------|-------------|
-| `model` | Model to use |
+| `model` | Model to use (omit for interactive model selection with `client=tui`) |
 | `thinking` | Stream thinking blocks to the client |
 | `yes` | Auto-confirm all `<ask type="confirm">` prompts |
 | `preset` | Neuron preset name |
 | `neuron_mode` | `manual`, `smart`, or `presets` |
+| `client` | Set to `tui` to enable remote TUI mode (model selection, file picker, file preview) |
+
+### Remote TUI mode
+
+Pass `--remote ws://host:port` to connect the full cognilite TUI to a remote server instead of a local Ollama instance:
+
+```bash
+cognilite --remote ws://192.168.1.10:8765
+```
+
+The title bar shows the remote address. All TUI features are proxied through the WebSocket session:
+
+- **Model selection** — server sends the available model list; TUI shows the same model select screen
+- **File picker** (`Ctrl+P`) — sends `ls` requests to the server; browse and pin files on the remote host
+- **`<preview>` tag** — model outputs `<preview path="..."/>`; server reads the file and sends a `file_preview` frame; TUI opens it in the local file panel
+- **Warmup spinner** — `warmup_start`/`warmup_done` frames show the same progress bar as local mode
+- **All tag-driven widgets** — `<ask>`, `<patch>`, `<mood>` work identically to local mode
+
+The URL may be a bare `ws://host:port` (the `/ws` path is added automatically) or include a full path and query string.
 
 ### What makes WebSocket mode unique
 
-Unlike a conventional chat API (ChatGPT, Claude.ai, etc.), the model in a WebSocket session runs on your own machine with full tool access:
+Unlike a conventional chat API, the model in a WebSocket session runs on your own machine with full tool access:
 
 - Executes real shell commands and injects results back into context
 - Reads and writes files directly on the server
@@ -291,25 +318,25 @@ Unlike a conventional chat API (ChatGPT, Claude.ai, etc.), the model in a WebSoc
 
 ## Mode comparison
 
-| Feature | TUI | Headless | HTTP Server | WebSocket |
-|---------|:---:|:--------:|:-----------:|:---------:|
-| Multi-turn conversation | ✓ | — | — | ✓ |
-| Tool execution (`<tool>`) | ✓ | ✓ | ✓ | ✓ |
-| Patch application (`<patch>`) | ✓ | ✓ | ✓ | ✓ |
-| Model-driven input (`<ask>`) | ✓ | ✓ (stdin) | ✓ (server terminal) | ✓ (client frame) |
-| Thinking output | ✓ (sidebar) | ✓ (`--thinking`) | ✓ (per-request `"thinking":true`) | ✓ (`?thinking=true`) |
-| KV cache warmup | ✓ | ✓ | ✓ | ✓ |
-| Pinned files | ✓ | ✓ (`--pin`) | ✓ (`"pin":[]`) | ✓ (`pin` frame) |
-| File attachments (`@path`) | ✓ | ✓ (`--attach`) | ✓ (`"attach":[]`) | ✓ (`"attach":[]` in frame) |
-| Neuron/preset selection | ✓ | ✓ | ✓ | ✓ |
-| Auto-confirm (`--yes`) | — | ✓ | ✓ | ✓ |
-| Runtime mode injected in system prompt | ✓ | ✓ | ✓ | ✓ |
-| Syntax-highlighted file picker | ✓ | — | — | — |
-| File panel (attachment viewer) | ✓ | — | — | — |
-| Markdown + code rendering | ✓ | — | — | — |
-| Mood indicator (`<mood>`) | ✓ | — | — | — |
-| Context window progress bar | ✓ | — | — | — |
-| Settings screen | ✓ | — | — | — |
+| Feature | TUI | Remote TUI | Headless | HTTP Server | WebSocket |
+|---------|:---:|:----------:|:--------:|:-----------:|:---------:|
+| Multi-turn conversation | ✓ | ✓ | — | — | ✓ |
+| Tool execution (`<tool>`) | ✓ | ✓ (server) | ✓ | ✓ | ✓ |
+| Patch application (`<patch>`) | ✓ | ✓ (server) | ✓ | ✓ | ✓ |
+| Model-driven input (`<ask>`) | ✓ | ✓ | ✓ (stdin) | ✓ (server terminal) | ✓ (client frame) |
+| Thinking output | ✓ (muted block) | ✓ (muted block) | ✓ (`--thinking`) | ✓ (`"thinking":true`) | ✓ (`?thinking=true`) |
+| KV cache warmup | ✓ | ✓ (remote) | ✓ | ✓ | ✓ |
+| Pinned files | ✓ | ✓ (remote) | ✓ (`--pin`) | ✓ (`"pin":[]`) | ✓ (`pin` frame) |
+| File attachments (`@path`) | ✓ | ✓ | ✓ (`--attach`) | ✓ (`"attach":[]`) | ✓ (`"attach":[]` in frame) |
+| Neuron/preset selection | ✓ | ✓ (remote) | ✓ | ✓ | ✓ |
+| Auto-confirm (`--yes`) | — | — | ✓ | ✓ | ✓ |
+| Runtime mode injected in system prompt | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Syntax-highlighted file picker | ✓ (local) | ✓ (remote) | — | — | — |
+| File panel (attachment / preview viewer) | ✓ | ✓ | — | — | — |
+| Markdown + code rendering | ✓ | ✓ | — | — | — |
+| Mood indicator (`<mood>`) | ✓ | ✓ | — | — | — |
+| Context window progress bar | ✓ | ✓ | — | — | — |
+| Settings screen | ✓ | — | — | — | — |
 
 ## Keybindings
 
@@ -642,22 +669,25 @@ Use `←` / `→` to adjust, `r` to reset.
 | **Stable num_ctx** | on | Rounds context to powers of 2 to preserve KV cache across requests |
 | **Keep model alive** | off | Passes `keep_alive: -1` — prevents model unloading between requests |
 | **Warm-up cache** | on | Pre-fills KV cache with the system prompt on model load |
+| **Thinking** | on | Sends `"think": true` to Ollama — enables extended thinking for supported models (QwQ, Gemma 3, etc.) |
 
 ## Architecture
 
 ```
 src/
-├── main.rs        — entry point, event loop, model loading, CLI arg parsing
+├── main.rs        — entry point, event loop, model loading, CLI arg parsing (--remote flag)
 ├── app.rs         — App state, message types, input editing, tag interception, tool/patch/ask/mood loop,
 │                    file picker/panel/pinned logic, highlight_code/highlight_file (syntect)
 ├── headless.rs    — headless mode: CLI arg struct, stream loop, stdin ask handler
 ├── server.rs      — HTTP server mode: TCP listener, per-connection handler, chunked streaming, argv builder; WebSocket upgrade routing
-├── websocket.rs   — WebSocket session: RFC 6455 handshake (SHA-1 inline), frame I/O, multi-turn stream loop, pin/unpin handling
+├── websocket.rs   — WebSocket server session: RFC 6455 handshake (SHA-1 inline), frame I/O, multi-turn stream loop,
+│                    pin/unpin handling, ls/ls_result, models/select_model handshake, file_preview
+├── ws_client.rs   — WebSocket client: TcpStream upgrade, masked frame I/O, frame type enum, background reader thread
 ├── synapse.rs     — Neuron/Synapse types, directory loader, tool context builder, .toml parser
-├── events.rs      — key event dispatch (config / model select / chat / history / ask / picker modes)
-├── ollama.rs      — Ollama API: list_models, fetch_context_length, stream_chat, warmup
+├── events.rs      — key event dispatch (config / model select / remote connect / chat / history / ask / picker modes)
+├── ollama.rs      — Ollama API: list_models, fetch_context_length, stream_chat (think param), warmup
 ├── clipboard.rs   — clipboard write (OSC 52 / pbcopy / wl-copy / xclip)
-└── ui.rs          — ratatui rendering: config, model select, chat, file picker, file panel, popups
+└── ui.rs          — ratatui rendering: config, model select, remote connect, chat, file picker, file panel, popups
 ```
 
 ```
@@ -670,9 +700,14 @@ src/
 
 ```rust
 struct App {
-    screen: Screen,                 // Config | ModelSelect | Chat
+    screen: Screen,                 // Config | ModelSelect | RemoteConnect | Chat
     ctx_strategy: CtxStrategy,     // Dynamic | Full
     neuron_mode: NeuronMode,        // Manual | Smart | Presets
+    // performance flags (all persisted to config.json)
+    ctx_pow2: bool,                 // round num_ctx to powers of 2
+    keep_alive: bool,               // pass keep_alive: -1 to Ollama
+    warmup: bool,                   // pre-fill KV cache on model load
+    thinking: bool,                 // send "think": true to Ollama
     messages: Vec<Message>,
     input: String,
     cursor_pos: usize,
@@ -680,6 +715,7 @@ struct App {
     stream_state: StreamState,      // Idle | Streaming | Error(String)
     stream_rx: Option<Receiver<StreamChunk>>,
     warmup_rx: Option<Receiver<()>>,
+    ws_warmup_started_at: Option<Instant>, // warmup timer in remote TUI mode
     used_tokens: u64,
     context_length: Option<u64>,
     working_dir: PathBuf,
@@ -696,6 +732,10 @@ struct App {
     file_picker: Option<FilePicker>,
     file_panel: Option<FilePanel>,
     highlight_cache: HashMap<PathBuf, (SystemTime, Vec<Line>)>,
+    // remote WebSocket client
+    ws_tx: Option<TcpStream>,
+    ws_rx: Option<Receiver<WsClientFrame>>,
+    remote_label: Option<String>,   // shown in title bar when connected remotely
 }
 
 enum AskKind        { Text, Confirm, Choice(Vec<String>) }
@@ -714,6 +754,7 @@ Each streaming chunk is accumulated into the last assistant message. After every
 | `<ask>...</ask>` | Strip from display, set `ask` state, stop stream, wait for user input |
 | `<patch>diff</patch>` | Replace with rendered `diff` block, set `pending_patch`, show confirm, stop stream |
 | `<mood>emoji</mood>` | Strip from display, update `current_mood`, **continue streaming** |
+| `<preview path="..."/>` | Strip from display, read file, send `file_preview` frame (WS) or open panel directly (local), **continue streaming** |
 
 `llm_content` is preserved intact for `<tool>` and `<ask>` tags so the model sees its own history. Tool messages are sent to Ollama as `"user"` role turns, compatible with base models that don't have a native tool-call protocol.
 

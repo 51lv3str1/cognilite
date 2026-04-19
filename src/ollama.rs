@@ -109,6 +109,7 @@ pub fn stream_chat(
     num_ctx: Option<u64>,
     gen_params: [f64; 3],
     keep_alive: bool,
+    thinking: bool,
     tx: Sender<StreamChunk>,
 ) {
     let url = format!("{}/api/chat", base_url);
@@ -127,6 +128,7 @@ pub fn stream_chat(
         "messages": messages,
         "stream": true,
         "options": options,
+        "think": thinking,
     });
     if keep_alive {
         body["keep_alive"] = serde_json::json!(-1);

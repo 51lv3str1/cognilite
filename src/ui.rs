@@ -373,9 +373,10 @@ fn draw_config(frame: &mut Frame, app: &App) {
             // ── Performance ───────────────────────────────────────────────────
             struct PerfOption<'a> { label: &'a str, desc: &'a str, value: bool }
             let perf_options = [
-                PerfOption { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache", value: app.ctx_pow2   },
-                PerfOption { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",  value: app.keep_alive },
-                PerfOption { label: "Warm-up cache",    desc: "Pre-fill KV cache with the system prompt on model load",    value: app.warmup     },
+                PerfOption { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache",  value: app.ctx_pow2   },
+                PerfOption { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",   value: app.keep_alive },
+                PerfOption { label: "Warm-up cache",    desc: "Pre-fill KV cache with the system prompt on model load",     value: app.warmup     },
+                PerfOption { label: "Thinking",         desc: "Enable extended thinking for supported models (think: true)", value: app.thinking   },
             ];
             let filtered: Vec<(usize, &PerfOption)> = perf_options.iter().enumerate()
                 .filter(|(_, o)| crate::app::fuzzy_match(&app.config_search, o.label))

@@ -1418,14 +1418,19 @@ fn draw_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     let popup_y = area.y + (area.height.saturating_sub(popup_height)) / 2;
     let popup_rect = Rect { x: popup_x, y: popup_y, width: popup_width, height: popup_height };
 
+    let is_remote = app.ws_tx.is_some();
+    let title = if is_remote { " 📎 attach file (host) " } else { " 📎 pin files " };
+    let hints = if is_remote {
+        " ↑↓ navigate  Enter/→ select  ← up  Esc close "
+    } else {
+        " ↑↓ navigate  Enter/→ enter/pin  ← up  PgUp/PgDn scroll preview  Esc close "
+    };
+
     frame.render_widget(Clear, popup_rect);
     frame.render_widget(
         Block::default()
-            .title(Span::styled(" 📎 pin files ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
-            .title_bottom(Span::styled(
-                " ↑↓ navigate  Enter/→ enter/pin  ← up  PgUp/PgDn scroll preview  Esc close ",
-                Style::default().fg(DIM),
-            ))
+            .title(Span::styled(title, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+            .title_bottom(Span::styled(hints, Style::default().fg(DIM)))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(ACCENT))
@@ -1448,10 +1453,14 @@ fn draw_file_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     // ── browser (left) ──────────────────────────────────────────────────────
 
-    let rel_dir = fp.current_dir.strip_prefix(&app.working_dir)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let path_label = if rel_dir.is_empty() { "./".to_string() } else { format!("{rel_dir}/") };
+    let rel_dir = if is_remote {
+        fp.current_dir.to_string_lossy().to_string()
+    } else {
+        fp.current_dir.strip_prefix(&app.working_dir)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default()
+    };
+    let path_label = if rel_dir.is_empty() || rel_dir == "." { "./".to_string() } else { format!("{rel_dir}/") };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("📁 ", Style::default().fg(ACCENT)),
@@ -1478,6 +1487,14 @@ fn draw_file_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     let list_y = browser_area.y + 2;
     let list_h = browser_area.height.saturating_sub(2) as usize;
+
+    if fp.loading {
+        frame.render_widget(
+            Paragraph::new(Span::styled("loading…", Style::default().fg(DIM))),
+            Rect { x: browser_area.x, y: list_y, width: browser_area.width, height: 1 },
+        );
+    }
+
     let total  = entries.len();
     let scroll = if fp.cursor >= list_h { fp.cursor + 1 - list_h } else { 0 };
 

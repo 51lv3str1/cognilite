@@ -331,6 +331,22 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
                 app.trigger_warmup();
                 send_json(&mut stream, serde_json::json!({"type":"unpinned","path":path}));
             }
+            Some("ls") => {
+                let rel = val.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                let dir = app.working_dir.join(rel);
+                let mut entries: Vec<serde_json::Value> = vec![];
+                if let Ok(rd) = std::fs::read_dir(&dir) {
+                    let mut list: Vec<_> = rd.flatten().collect();
+                    list.sort_by_key(|e| e.file_name());
+                    for e in list {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        if name.starts_with('.') { continue; }
+                        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                        entries.push(serde_json::json!({"name": name, "is_dir": is_dir}));
+                    }
+                }
+                send_json(&mut stream, serde_json::json!({"type":"ls_result","path":rel,"entries":entries}));
+            }
             Some("ping") => { send_json(&mut stream, serde_json::json!({"type":"pong"})); }
             _ => {}
         }

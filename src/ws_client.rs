@@ -18,6 +18,7 @@ pub enum WsClientFrame {
     Patch(String),
     Mood(String),
     FilePreview { path: String, content: String },
+    LsResult { path: String, entries: Vec<(String, bool)> }, // (name, is_dir)
     Done { tps: f64, tokens: u64, prompt_eval: u64 },
     WarmupStart,
     WarmupDone,
@@ -185,6 +186,16 @@ fn parse_frame(val: serde_json::Value) -> WsClientFrame {
         Some("file_preview") => WsClientFrame::FilePreview {
             path:    s("path"),
             content: s("content"),
+        },
+        Some("ls_result") => WsClientFrame::LsResult {
+            path: s("path"),
+            entries: val["entries"].as_array().map(|arr| {
+                arr.iter().filter_map(|e| {
+                    let name   = e["name"].as_str()?.to_string();
+                    let is_dir = e["is_dir"].as_bool().unwrap_or(false);
+                    Some((name, is_dir))
+                }).collect()
+            }).unwrap_or_default(),
         },
 
         Some("done") => {

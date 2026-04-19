@@ -182,6 +182,7 @@ pub struct FilePicker {
     pub preview_scroll: usize,
     pub pending_path: Option<PathBuf>,
     pub highlight_rx: Option<mpsc::Receiver<(PathBuf, Vec<Line<'static>>)>>,
+    pub loading: bool, // true while waiting for ls_result from server
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1259,6 +1260,27 @@ impl App {
                 self.open_file_panel_remote(&path, &content);
             }
 
+            F::LsResult { path, entries } => {
+                if let Some(fp) = &mut self.file_picker {
+                    let base = if path == "." || path.is_empty() { String::new() } else { format!("{}/", path.trim_end_matches('/')) };
+                    let has_parent = !path.is_empty() && path != ".";
+                    let mut result: Vec<FilePickerEntry> = vec![];
+                    if has_parent { result.push(FilePickerEntry::Parent); }
+                    for (name, is_dir) in entries {
+                        if name.starts_with('.') { continue; }
+                        if is_dir {
+                            result.push(FilePickerEntry::Dir(format!("{base}{name}")));
+                        } else {
+                            result.push(FilePickerEntry::File(format!("{base}{name}")));
+                        }
+                    }
+                    fp.current_dir = PathBuf::from(&path);
+                    fp.entries = result;
+                    fp.cursor = 0;
+                    fp.loading = false;
+                }
+            }
+
             F::Done { tps, tokens, prompt_eval } => {
                 let wall_secs = self.stream_started_at
                     .map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
@@ -1779,14 +1801,39 @@ impl App {
     }
 
     pub fn open_file_picker(&mut self) {
+        if self.ws_tx.is_some() {
+            self.request_server_ls(".");
+            return;
+        }
         let dir = self.working_dir.clone();
         let entries = load_picker_entries(&dir, &dir);
         self.file_picker = Some(FilePicker {
             current_dir: dir, entries, cursor: 0, query: String::new(),
             preview: vec![], preview_scroll: 0,
-            pending_path: None, highlight_rx: None,
+            pending_path: None, highlight_rx: None, loading: false,
         });
         self.update_preview();
+    }
+
+    /// In WS mode: send an `ls` request to the server and show the picker in loading state.
+    pub fn request_server_ls(&mut self, rel_path: &str) {
+        if let Some(ref mut tx) = self.ws_tx {
+            crate::ws_client::send_json(tx, serde_json::json!({"type":"ls","path":rel_path}));
+        }
+        let dir = PathBuf::from(rel_path);
+        if self.file_picker.is_none() {
+            self.file_picker = Some(FilePicker {
+                current_dir: dir, entries: vec![], cursor: 0, query: String::new(),
+                preview: vec![], preview_scroll: 0,
+                pending_path: None, highlight_rx: None, loading: true,
+            });
+        } else if let Some(fp) = &mut self.file_picker {
+            fp.current_dir = dir;
+            fp.entries.clear();
+            fp.cursor = 0;
+            fp.query.clear();
+            fp.loading = true;
+        }
     }
 
     pub fn close_file_picker(&mut self) {
@@ -1919,9 +1966,15 @@ impl App {
         let cursor  = self.file_picker.as_ref().map(|fp| fp.cursor).unwrap_or(0);
         let Some(entry) = visible.into_iter().nth(cursor) else { return };
         match entry {
-            FilePickerEntry::Parent => { self.file_picker_go_up(); return; } // go_up calls update_preview
+            FilePickerEntry::Parent => { self.file_picker_go_up(); return; }
             FilePickerEntry::Dir(name) => {
-                let new_dir    = self.file_picker.as_ref().unwrap().current_dir.join(&name);
+                if self.ws_tx.is_some() {
+                    let cur = self.file_picker.as_ref().unwrap().current_dir.clone();
+                    let sub = cur.join(&name).to_string_lossy().to_string();
+                    self.request_server_ls(&sub);
+                    return;
+                }
+                let new_dir     = self.file_picker.as_ref().unwrap().current_dir.join(&name);
                 let working_dir = self.working_dir.clone();
                 if new_dir.is_dir() {
                     let entries = load_picker_entries(&new_dir, &working_dir);
@@ -1934,6 +1987,16 @@ impl App {
                 }
             }
             FilePickerEntry::File(display) => {
+                if self.ws_tx.is_some() {
+                    // insert @path into the message input and close picker
+                    let at_path = format!("@{display}");
+                    let byte = self.input.char_indices().nth(self.cursor_pos)
+                        .map(|(b, _)| b).unwrap_or(self.input.len());
+                    self.input.insert_str(byte, &at_path);
+                    self.cursor_pos += at_path.chars().count();
+                    self.file_picker = None;
+                    return;
+                }
                 if self.pinned_files.iter().any(|pf| pf.display == display) {
                     let d = display.clone();
                     self.unpin_file(&d);
@@ -1952,6 +2015,16 @@ impl App {
         if query_non_empty {
             if let Some(fp) = &mut self.file_picker { fp.query.clear(); fp.cursor = 0; }
             self.update_preview();
+            return;
+        }
+
+        if self.ws_tx.is_some() {
+            let current = self.file_picker.as_ref().unwrap().current_dir.clone();
+            let parent = current.parent()
+                .map(|p| if p == std::path::Path::new("") { "." } else { p.to_str().unwrap_or(".") })
+                .unwrap_or(".");
+            let parent_s = parent.to_string();
+            self.request_server_ls(&parent_s);
             return;
         }
 
@@ -2010,6 +2083,7 @@ impl App {
     }
 
     pub fn update_preview(&mut self) {
+        if self.ws_tx.is_some() { return; } // server-side files, no local preview
         let path = self.file_picker_selected_path();
 
         // No file selected — clear preview

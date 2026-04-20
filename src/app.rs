@@ -498,7 +498,7 @@ impl App {
             remote_ollama_rx: None,
             remote_label: None,
             username: cfg.username,
-            room_id: None,
+            room_id: Some(crate::websocket::new_uuid()),
             join_room_input: None,
             username_editing: false,
             show_room_share: false,

@@ -269,7 +269,7 @@ impl SessionConfig {
     }
 }
 
-pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, room: SharedRoom, room_id: String) {
+pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, room: SharedRoom, room_id: String, silent: bool) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "?".into());
 
     let mut app = App::new(base_url.to_string());
@@ -373,12 +373,25 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
     }
 
     let ctx_str = app.context_length.map(|n| format!("{}k", n/1024)).unwrap_or_else(|| "?".into());
-    eprintln!("[ws] {peer} connected — {model_name} (room {room_id})");
+    if !silent { eprintln!("[ws] {peer} connected — {model_name} (room {room_id})"); }
 
-    // load room history and track versions
+    // load room history and push join presence event
     let (mut known_version, mut known_token_version, mut sent_token_len) = {
-        let r = room.lock().unwrap();
+        let mut r = room.lock().unwrap();
         app.messages = r.messages.clone();
+        let join_msg = crate::app::Message {
+            role: crate::app::Role::Tool,
+            content: format!("**{}** se unió a la sala.", cfg.username),
+            llm_content: format!("{} joined the room.", cfg.username),
+            images: vec![],
+            attachments: vec![],
+            thinking: String::new(),
+            thinking_secs: None,
+            stats: None,
+            tool_call: Some("⬡ Sala".to_string()),
+        };
+        r.messages.push(join_msg);
+        r.version += 1;
         (r.version, r.live_token_version, r.live_tokens.len())
     };
 
@@ -541,7 +554,24 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
     }
 
     let _ = stream.set_read_timeout(None);
-    eprintln!("[ws] {peer} disconnected (room {room_id})");
+    if !silent { eprintln!("[ws] {peer} disconnected (room {room_id})"); }
+    // push leave presence event to room
+    {
+        let mut r = room.lock().unwrap();
+        let leave_msg = crate::app::Message {
+            role: crate::app::Role::Tool,
+            content: format!("**{}** salió de la sala.", cfg.username),
+            llm_content: format!("{} left the room.", cfg.username),
+            images: vec![],
+            attachments: vec![],
+            thinking: String::new(),
+            thinking_secs: None,
+            stats: None,
+            tool_call: Some("⬡ Sala".to_string()),
+        };
+        r.messages.push(leave_msg);
+        r.version += 1;
+    }
 }
 
 /// Runs the stream loop for one assistant turn. Returns false if the WebSocket connection dropped.

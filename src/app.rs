@@ -383,6 +383,7 @@ pub struct App {
     pub username: String,
     pub room_id: Option<String>,      // UUID of the current WS room
     pub shared_room: Option<crate::websocket::SharedRoom>, // shared room state (local server)
+    pub room_synced_len: usize,       // how many room messages we've already pulled into app.messages
     pub join_room_input: Option<String>, // Some = join-room dialog open
     pub username_editing: bool,       // true while editing username in settings
     pub show_room_share: bool,        // show room share popup in chat
@@ -501,6 +502,7 @@ impl App {
             username: cfg.username,
             room_id: Some(crate::websocket::new_uuid()),
             shared_room: None,
+            room_synced_len: 0,
             join_room_input: None,
             username_editing: false,
             show_room_share: false,
@@ -579,27 +581,47 @@ impl App {
         }
     }
 
-    /// Sync the full message history to the shared room and clear live tokens.
-    pub fn room_sync_done(&self) {
+    /// Append the last message (user or assistant) to the shared room (append-only).
+    pub fn room_sync_done(&mut self) {
         if let Some(ref room) = self.shared_room {
             if let Ok(mut r) = room.lock() {
-                r.messages = self.messages.clone();
+                // append any messages not yet in the room (from room_synced_len onward)
+                let new = &self.messages[r.messages.len()..];
+                r.messages.extend(new.iter().cloned());
                 r.version += 1;
                 r.live_tokens.clear();
                 r.live_token_version = 0;
                 r.live_user.clear();
+                self.room_synced_len = r.messages.len();
             }
         }
     }
 
-    /// Sync user message to the room immediately when the user hits Enter.
-    pub fn room_sync_user_msg(&self) {
+    /// Append the user message to the room immediately when the user hits Enter.
+    pub fn room_sync_user_msg(&mut self) {
         if let Some(ref room) = self.shared_room {
             if let Ok(mut r) = room.lock() {
-                r.messages = self.messages.clone();
+                let new = &self.messages[r.messages.len()..];
+                r.messages.extend(new.iter().cloned());
                 r.version += 1;
                 r.live_user = self.username.clone();
+                self.room_synced_len = r.messages.len();
             }
+        }
+    }
+
+    /// Pull new messages (presence events from WS clients) from the shared room into app.messages.
+    pub fn poll_room(&mut self) {
+        let room = match self.shared_room.as_ref() { Some(r) => r.clone(), None => return };
+        let r = match room.lock() { Ok(r) => r, Err(_) => return };
+        if r.messages.len() > self.room_synced_len {
+            let new = r.messages[self.room_synced_len..].to_vec();
+            drop(r);
+            for msg in new {
+                self.messages.push(msg);
+                self.room_synced_len += 1;
+            }
+            self.auto_scroll = true;
         }
     }
 

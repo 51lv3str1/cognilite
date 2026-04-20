@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     }
 
     if let Some((host, port, thinking)) = parse_server_args(&argv) {
-        server::run(&ollama_url, &host, port, thinking, crate::websocket::new_room_registry());
+        server::run(&ollama_url, &host, port, thinking, crate::websocket::new_room_registry(), false);
         return Ok(());
     }
 
@@ -78,7 +78,7 @@ fn main() -> Result<()> {
             let rooms = rooms.clone();
             let host = DEFAULT_SERVER_HOST.to_string();
             let ollama = ollama_url.clone();
-            std::thread::spawn(move || server::run(&ollama, &host, DEFAULT_SERVER_PORT, false, rooms));
+            std::thread::spawn(move || server::run(&ollama, &host, DEFAULT_SERVER_PORT, false, rooms, true));
         }
 
         load_models(&mut app);
@@ -245,6 +245,7 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> color_eyr
     loop {
         app.poll_warmup();
         app.poll_stream();
+        app.poll_room();
         app.poll_ws();
         app.poll_local_models();
         app.poll_remote_connect();

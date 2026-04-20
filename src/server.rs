@@ -7,19 +7,21 @@ use std::sync::Mutex;
 static STDIN_LOCK: Mutex<()> = Mutex::new(());
 
 /// Starts the HTTP server. Blocks until the process is killed.
-pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool, rooms: crate::websocket::RoomRegistry) {
+pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool, rooms: crate::websocket::RoomRegistry, silent: bool) {
     let addr = format!("{host}:{port}");
     let listener = match TcpListener::bind(&addr) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[server] failed to bind {addr}: {e}");
-            return; // embedded server: don't exit the whole process
+            if !silent { eprintln!("[server] failed to bind {addr}: {e}"); }
+            return;
         }
     };
-    eprintln!("[server] cognilite listening on http://{addr}");
-    eprintln!("[server] POST /chat  {{\"message\": \"...\", ...}}");
-    eprintln!("[server] WS    ws://{addr}/id/{{uuid}}  — join room");
-    eprintln!("[server] Ctrl+C to stop");
+    if !silent {
+        eprintln!("[server] cognilite listening on http://{addr}");
+        eprintln!("[server] POST /chat  {{\"message\": \"...\", ...}}");
+        eprintln!("[server] WS    ws://{addr}/id/{{uuid}}  — join room");
+        eprintln!("[server] Ctrl+C to stop");
+    }
 
     let exe = match std::env::current_exe() {
         Ok(p) => p,
@@ -29,17 +31,17 @@ pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool, rooms
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
-                let exe   = exe.clone();
+                let exe    = exe.clone();
                 let ollama = ollama_url.to_string();
                 let rooms  = rooms.clone();
-                std::thread::spawn(move || handle(s, exe, ollama, thinking_server, rooms));
+                std::thread::spawn(move || handle(s, exe, ollama, thinking_server, rooms, silent));
             }
-            Err(e) => eprintln!("[server] accept error: {e}"),
+            Err(e) => { if !silent { eprintln!("[server] accept error: {e}"); } }
         }
     }
 }
 
-fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, thinking_server: bool, rooms: crate::websocket::RoomRegistry) {
+fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, thinking_server: bool, rooms: crate::websocket::RoomRegistry, silent: bool) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "?".into());
 
     let Some((method, full_path, headers, body)) = parse_http(&mut stream) else {
@@ -56,8 +58,8 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, th
         let (room_id, room) = resolve_room(path_only, &rooms);
         let query = crate::websocket::parse_query(&full_path);
         let cfg   = crate::websocket::SessionConfig::from_query(&query, thinking_server);
-        eprintln!("[ws] {peer} upgrading → room {room_id}");
-        crate::websocket::run_session(stream, &ollama_url, cfg, room, room_id);
+        if !silent { eprintln!("[ws] {peer} upgrading → room {room_id}"); }
+        crate::websocket::run_session(stream, &ollama_url, cfg, room, room_id, silent);
         return;
     }
 
@@ -88,7 +90,7 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, th
         return;
     }
 
-    eprintln!("[server] {} — {}", peer, &message[..message.len().min(80)]);
+    if !silent { eprintln!("[server] {} — {}", peer, &message[..message.len().min(80)]); }
 
     let argv = build_argv(&val, &ollama_url, &message, thinking_server);
 
@@ -136,7 +138,7 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, th
     let _ = write!(stream, "0\r\n\r\n");
     let _ = stream.flush();
     let _ = child.wait();
-    eprintln!("[server] {} done", peer);
+    if !silent { eprintln!("[server] {} done", peer); }
     // _guard dropped here — next queued connection acquires STDIN_LOCK and proceeds
 }
 

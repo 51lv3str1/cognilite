@@ -6,7 +6,7 @@ use std::sync::mpsc;
 
 #[derive(Debug)]
 pub enum WsClientFrame {
-    Connected { model: String, #[allow(dead_code)] ctx: String },
+    Connected { model: String, #[allow(dead_code)] ctx: String, room_id: String },
     Token(String),
     ThinkingStart,
     Thinking(String),
@@ -167,7 +167,7 @@ pub fn connect(url: &str) -> Result<(TcpStream, mpsc::Receiver<WsClientFrame>), 
 fn parse_frame(val: serde_json::Value) -> WsClientFrame {
     let s = |k: &str| val.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     match val.get("type").and_then(|v| v.as_str()) {
-        Some("connected") => WsClientFrame::Connected { model: s("model"), ctx: s("ctx") },
+        Some("connected") => WsClientFrame::Connected { model: s("model"), ctx: s("ctx"), room_id: s("room_id") },
 
         Some("token")         => WsClientFrame::Token(s("content")),
         Some("thinking_start") => WsClientFrame::ThinkingStart,

@@ -402,6 +402,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
             let filtered: Vec<(usize, &FeatureOption)> = feature_options.iter().enumerate()
                 .filter(|(_, o)| crate::app::fuzzy_match(&app.config_search, o.label))
                 .collect();
+            let mut row_offset = 0usize;
             for (row, (orig_idx, opt)) in filtered.iter().enumerate() {
                 let cursor = *orig_idx == app.features_cursor;
                 let (marker, circle_fg) = if opt.value { ("●", ACCENT) } else { ("○", DIM) };
@@ -413,6 +414,31 @@ fn draw_config(frame: &mut Frame, app: &App) {
                     Span::styled(opt.label, name_style),
                     Span::styled(format!("  —  {}", opt.desc), desc_style),
                 ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
+                row_offset = row + 1;
+            }
+
+            // username field (always shown when not filtered out)
+            if crate::app::fuzzy_match(&app.config_search, "Username") {
+                let username_row = items_y + row_offset as u16;
+                let cursor = app.features_cursor == feature_options.len();
+                let label_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+                let value_style = if app.username_editing {
+                    Style::default().fg(ACCENT).bg(SURFACE)
+                } else if cursor {
+                    Style::default().fg(DIM).bg(SURFACE)
+                } else {
+                    Style::default().fg(DIM)
+                };
+                let value_text = if app.username_editing {
+                    format!("  ›  {}█", app.username)
+                } else {
+                    format!("  —  {}", app.username)
+                };
+                frame.render_widget(Paragraph::new(Line::from(vec![
+                    Span::styled("     ", if cursor { Style::default().bg(SURFACE) } else { Style::default() }),
+                    Span::styled("Username", label_style),
+                    Span::styled(value_text, value_style),
+                ])), Rect { x: inner.x, y: username_row, width: inner.width, height: 1 });
             }
         }
     }
@@ -669,10 +695,39 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         Span::raw("  "),
         hint("Ctrl+R", "remote"),
         Span::raw("  "),
+        hint("Ctrl+J", "join room"),
+        Span::raw("  "),
         hint("F1", "help"),
         Span::raw("  "),
         hint("Ctrl+C", "quit"),
     ]);
+
+    // ── Join Room dialog ────────────────────────────────────────────────────
+    if let Some(ref uuid_input) = app.join_room_input {
+        let popup_w = area.width.min(60);
+        let popup_h = 5u16;
+        let px = area.x + (area.width.saturating_sub(popup_w)) / 2;
+        let py = area.y + (area.height.saturating_sub(popup_h)) / 2;
+        let popup_area = Rect { x: px, y: py, width: popup_w, height: popup_h };
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        let block = Block::default()
+            .title(Span::styled(" Join Room ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .style(Style::default().bg(BG));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+        let display = if uuid_input.is_empty() {
+            Span::styled("room UUID…", Style::default().fg(DIM))
+        } else {
+            Span::styled(uuid_input.as_str(), Style::default().fg(Color::White))
+        };
+        frame.render_widget(Paragraph::new(Line::from(vec![Span::raw(" "), display])), inner);
+        if !uuid_input.is_empty() {
+            frame.set_cursor_position((inner.x + 1 + uuid_input.len() as u16, inner.y));
+        }
+    }
 
     if app.show_help {
         const SECTIONS: &[(&str, &[(&str, &str)])] = &[
@@ -784,6 +839,11 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         header_spans.push(Span::styled(format!("  {mood}"), Style::default()));
     }
 
+    if let Some(ref rid) = app.room_id {
+        let short = &rid[..rid.len().min(8)];
+        header_spans.push(Span::styled(format!("  ⬡ {short}"), Style::default().fg(DIM)));
+    }
+
     if let Some(t) = app.copy_notice {
         if t.elapsed().as_secs_f64() < 2.0 {
             header_spans.push(Span::styled("  ✓ copied", Style::default().fg(USER_COLOR)));
@@ -836,10 +896,11 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 } else {
                     Span::raw("")
                 };
+                let sender = msg.tool_call.as_deref().unwrap_or(app.username.as_str());
                 let prefix = if is_selected {
-                    Span::styled("► You", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD))
+                    Span::styled(format!("► {sender}"), Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD))
                 } else {
-                    Span::styled("You", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD))
+                    Span::styled(sender.to_string(), Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD))
                 };
                 lines.push(Line::from(vec![prefix, copy_hint]));
                 // show message text (with @refs stripped to just the filename)

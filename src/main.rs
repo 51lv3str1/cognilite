@@ -185,10 +185,28 @@ fn parse_remote_arg(argv: &[String]) -> Option<String> {
     }
     // always identify as TUI client so the server injects the right runtime context
     params.push("client=tui".into());
+    // pass username so the server can tag messages with the sender's name
+    let username = app::load_config().username;
+    if !username.is_empty() {
+        params.push(format!("username={}", url_encode(&username)));
+    }
     let sep = if url.contains('?') { '&' } else { '?' };
     url.push(sep);
     url.push_str(&params.join("&"));
     Some(url)
+}
+
+fn url_encode(s: &str) -> String {
+    s.chars().fold(String::new(), |mut out, c| {
+        if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+            out.push(c);
+        } else {
+            for b in c.to_string().as_bytes() {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        }
+        out
+    })
 }
 
 fn load_models(app: &mut App) {

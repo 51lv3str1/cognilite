@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
+use std::sync::{Arc, Mutex};
 
 use crate::app::{
     App, AskKind, Attachment, AttachmentKind, Message, NeuronMode, Role, StreamState,
@@ -10,6 +11,37 @@ use crate::app::{
     extract_preview_tag, extract_tool_call, build_runtime_context, RuntimeMode,
 };
 use crate::headless::safe_print_boundary;
+
+// ── Room registry ─────────────────────────────────────────────────────────
+
+pub struct RoomState {
+    pub messages: Vec<crate::app::Message>,
+    pub version:  u64,
+}
+
+pub type SharedRoom    = Arc<Mutex<RoomState>>;
+pub type RoomRegistry  = Arc<Mutex<HashMap<String, SharedRoom>>>;
+
+pub fn new_room_registry() -> RoomRegistry {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+pub fn new_uuid() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CTR: AtomicU64 = AtomicU64::new(0);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+    let c = CTR.fetch_add(1, Ordering::Relaxed);
+    let p = std::process::id() as u64;
+    let a = t ^ (p << 32) ^ c.wrapping_mul(0x9e3779b97f4a7c15);
+    let b = t.wrapping_mul(0x6c62272e07bb0142) ^ c.wrapping_add(p);
+    format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+        (a >> 32) as u32,
+        ((a >> 16) & 0xffff) as u16,
+        (a & 0xfff) as u16,
+        (0x8000 | (b >> 48 & 0x3fff)) as u16,
+        b & 0x0000_ffff_ffff_ffff)
+}
 
 // ── SHA-1 ─────────────────────────────────────────────────────────────────
 
@@ -133,6 +165,40 @@ fn send_json(stream: &mut TcpStream, val: serde_json::Value) -> bool {
     write_frame(stream, OP_TEXT, val.to_string().as_bytes())
 }
 
+enum FrameResult { Frame(u8, Vec<u8>), Timeout, Disconnected }
+
+fn read_frame_timeout(stream: &mut TcpStream) -> FrameResult {
+    let mut hdr = [0u8; 2];
+    match stream.read_exact(&mut hdr) {
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => return FrameResult::Timeout,
+        Err(_) => return FrameResult::Disconnected,
+        Ok(_) => {}
+    }
+    let opcode = hdr[0] & 0x0f;
+    let masked = (hdr[1] & 0x80) != 0;
+    let mut len = (hdr[1] & 0x7f) as usize;
+    if len == 126 {
+        let mut ext = [0u8; 2];
+        if stream.read_exact(&mut ext).is_err() { return FrameResult::Disconnected; }
+        len = u16::from_be_bytes(ext) as usize;
+    } else if len == 127 {
+        let mut ext = [0u8; 8];
+        if stream.read_exact(&mut ext).is_err() { return FrameResult::Disconnected; }
+        len = u64::from_be_bytes(ext) as usize;
+    }
+    let mask = if masked {
+        let mut m = [0u8; 4];
+        if stream.read_exact(&mut m).is_err() { return FrameResult::Disconnected; }
+        Some(m)
+    } else { None };
+    let mut payload = vec![0u8; len];
+    if stream.read_exact(&mut payload).is_err() { return FrameResult::Disconnected; }
+    if let Some(m) = mask {
+        for (i, b) in payload.iter_mut().enumerate() { *b ^= m[i % 4]; }
+    }
+    FrameResult::Frame(opcode, payload)
+}
+
 // ── Query string parser ───────────────────────────────────────────────────
 
 pub fn parse_query(path: &str) -> HashMap<String, Vec<String>> {
@@ -178,6 +244,7 @@ pub struct SessionConfig {
     pub yes:          bool,
     pub thinking_srv: bool, // also show thinking on server stderr
     pub tui_client:   bool, // client is the cognilite TUI (--remote mode)
+    pub username:     String,
 }
 
 impl SessionConfig {
@@ -192,14 +259,18 @@ impl SessionConfig {
             yes:         get("yes").map(|s| s == "true" || s == "1").unwrap_or(false),
             thinking_srv,
             tui_client:  get("client").map(|s| s == "tui").unwrap_or(false),
+            username:    get("username").map(str::to_string)
+                             .unwrap_or_else(crate::app::default_username),
         }
     }
 }
 
-pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
+pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, room: SharedRoom, room_id: String) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "?".into());
 
     let mut app = App::new(base_url.to_string());
+    app.username = cfg.username.clone();
+    app.room_id  = Some(room_id.clone());
 
     // apply config
     if let Some(mode) = cfg.neuron_mode { app.neuron_mode = mode; }
@@ -298,19 +369,64 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
     }
 
     let ctx_str = app.context_length.map(|n| format!("{}k", n/1024)).unwrap_or_else(|| "?".into());
-    eprintln!("[ws] {peer} connected — {model_name}");
+    eprintln!("[ws] {peer} connected — {model_name} (room {room_id})");
+
+    // load room history and track version
+    let mut known_version = {
+        let r = room.lock().unwrap();
+        app.messages = r.messages.clone();
+        r.version
+    };
+
+    // send history snapshot to client before `connected` frame
+    if !app.messages.is_empty() {
+        let history: Vec<serde_json::Value> = app.messages.iter().map(|m| {
+            serde_json::json!({
+                "role":    m.role.to_api_str(),
+                "content": m.content,
+                "user":    m.tool_call.as_deref().unwrap_or(""),
+            })
+        }).collect();
+        if !send_json(&mut stream, serde_json::json!({"type":"history","messages":history})) { return; }
+    }
 
     if !send_json(&mut stream, serde_json::json!({
         "type": "connected",
         "model": model_name,
         "ctx": ctx_str,
+        "room_id": room_id,
+        "username": cfg.username,
     })) { return; }
+
+    // use 100ms read timeout so we can poll room version between client frames
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(100)));
 
     // outer loop: one frame per interaction
     loop {
-        let (opcode, payload) = match read_frame(&mut stream) {
-            Some(f) => f,
-            None => break,
+        // ── poll room for messages from other users ──────────────────────
+        let current_version = room.lock().unwrap().version;
+        if current_version != known_version {
+            let new_msgs: Vec<serde_json::Value> = {
+                let r = room.lock().unwrap();
+                r.messages[app.messages.len()..].iter().map(|m| serde_json::json!({
+                    "role":    m.role.to_api_str(),
+                    "content": m.content,
+                    "user":    m.tool_call.as_deref().unwrap_or(""),
+                })).collect()
+            };
+            if !new_msgs.is_empty() {
+                if !send_json(&mut stream, serde_json::json!({"type":"room_update","messages":new_msgs})) { break; }
+                // sync local messages
+                let r = room.lock().unwrap();
+                app.messages = r.messages.clone();
+            }
+            known_version = current_version;
+        }
+
+        let (opcode, payload) = match read_frame_timeout(&mut stream) {
+            FrameResult::Frame(op, p) => (op, p),
+            FrameResult::Timeout      => continue,
+            FrameResult::Disconnected => break,
         };
 
         match opcode {
@@ -346,12 +462,24 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
                 // delegate to send_message() to get pinned-file diffs and @path handling for free
                 app.input = input;
                 app.cursor_pos = app.input.len();
+                // tag the user message with the username
                 app.send_message();
+                if let Some(last) = app.messages.iter_mut().rev().find(|m| m.role == Role::User) {
+                    last.tool_call = Some(cfg.username.clone());
+                }
 
                 if !stream_loop(&mut app, &mut stream, cfg.thinking, cfg.thinking_srv, cfg.yes) {
                     break;
                 }
                 app.stream_state = StreamState::Idle;
+
+                // push new messages (user + assistant + any tools) to shared room
+                {
+                    let mut r = room.lock().unwrap();
+                    r.messages = app.messages.clone();
+                    r.version += 1;
+                    known_version = r.version;
+                }
             }
             Some("pin") => {
                 let path = val.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -388,7 +516,8 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig) {
         }
     }
 
-    eprintln!("[ws] {peer} disconnected");
+    let _ = stream.set_read_timeout(None);
+    eprintln!("[ws] {peer} disconnected (room {room_id})");
 }
 
 /// Runs the stream loop for one assistant turn. Returns false if the WebSocket connection dropped.

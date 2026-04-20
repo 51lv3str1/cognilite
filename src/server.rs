@@ -15,6 +15,7 @@ pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool) {
     });
     eprintln!("[server] cognilite listening on http://{addr}");
     eprintln!("[server] POST /chat  {{\"message\": \"...\", ...}}");
+    eprintln!("[server] WS    ws://{addr}/id/{{uuid}}  — join room");
     eprintln!("[server] Ctrl+C to stop");
 
     let exe = match std::env::current_exe() {
@@ -22,19 +23,22 @@ pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool) {
         Err(e) => { eprintln!("[server] cannot resolve binary path: {e}"); return; }
     };
 
+    let rooms = crate::websocket::new_room_registry();
+
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
-                let exe = exe.clone();
+                let exe   = exe.clone();
                 let ollama = ollama_url.to_string();
-                std::thread::spawn(move || handle(s, exe, ollama, thinking_server));
+                let rooms  = rooms.clone();
+                std::thread::spawn(move || handle(s, exe, ollama, thinking_server, rooms));
             }
             Err(e) => eprintln!("[server] accept error: {e}"),
         }
     }
 }
 
-fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, thinking_server: bool) {
+fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, thinking_server: bool, rooms: crate::websocket::RoomRegistry) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "?".into());
 
     let Some((method, full_path, headers, body)) = parse_http(&mut stream) else {
@@ -47,10 +51,12 @@ fn handle(mut stream: TcpStream, exe: std::path::PathBuf, ollama_url: String, th
     if is_ws {
         let key = headers.get("sec-websocket-key").cloned().unwrap_or_default();
         if !crate::websocket::handshake(&mut stream, &key) { return; }
+        let path_only = full_path.splitn(2, '?').next().unwrap_or("/");
+        let (room_id, room) = resolve_room(path_only, &rooms);
         let query = crate::websocket::parse_query(&full_path);
-        let cfg = crate::websocket::SessionConfig::from_query(&query, thinking_server);
-        eprintln!("[ws] {peer} connected");
-        crate::websocket::run_session(stream, &ollama_url, cfg);
+        let cfg   = crate::websocket::SessionConfig::from_query(&query, thinking_server);
+        eprintln!("[ws] {peer} upgrading → room {room_id}");
+        crate::websocket::run_session(stream, &ollama_url, cfg, room, room_id);
         return;
     }
 
@@ -224,4 +230,18 @@ fn parse_http(stream: &mut TcpStream) -> Option<(String, String, std::collection
     if content_length > 0 { reader.read_exact(&mut body).ok()?; }
 
     Some((method, full_path, headers, body))
+}
+
+fn resolve_room(path: &str, rooms: &crate::websocket::RoomRegistry) -> (String, crate::websocket::SharedRoom) {
+    use std::sync::{Arc, Mutex};
+    let uuid = path.strip_prefix("/id/").filter(|s| !s.is_empty()).map(str::to_string);
+    let id = uuid.unwrap_or_else(crate::websocket::new_uuid);
+    let room = {
+        let mut map = rooms.lock().unwrap();
+        map.entry(id.clone()).or_insert_with(|| Arc::new(Mutex::new(crate::websocket::RoomState {
+            messages: vec![],
+            version:  0,
+        }))).clone()
+    };
+    (id, room)
 }

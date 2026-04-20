@@ -247,14 +247,46 @@ fn handle_config(app: &mut App, key: KeyEvent) {
         }
     } else {
         const FEATURE_LABELS: &[&str] = &["Thinking"];
+        const USERNAME_IDX: usize = FEATURE_LABELS.len(); // index of the username row
+
+        // username editing mode: intercept all keys
+        if app.username_editing {
+            match key.code {
+                KeyCode::Enter => { let name = app.username.clone(); app.set_username(name); }
+                KeyCode::Esc   => { app.username_editing = false; }
+                KeyCode::Backspace => { app.username.pop(); }
+                KeyCode::Char(c)   => { app.username.push(c); }
+                _ => {}
+            }
+            return;
+        }
+
         let filtered: Vec<usize> = FEATURE_LABELS.iter().enumerate()
             .filter(|(_, l)| fuzzy_match(&app.config_search, l))
             .map(|(i, _)| i)
             .collect();
         match key.code {
-            KeyCode::Up   => nav_prev(&mut app.features_cursor, &filtered),
-            KeyCode::Down => nav_next(&mut app.features_cursor, &filtered),
-            KeyCode::Enter | KeyCode::Char(' ') => app.toggle_feature(app.features_cursor),
+            KeyCode::Up => {
+                if app.features_cursor == USERNAME_IDX {
+                    app.features_cursor = filtered.last().copied().unwrap_or(0);
+                } else {
+                    nav_prev(&mut app.features_cursor, &filtered);
+                }
+            }
+            KeyCode::Down => {
+                if app.features_cursor == *filtered.last().unwrap_or(&0) {
+                    app.features_cursor = USERNAME_IDX;
+                } else {
+                    nav_next(&mut app.features_cursor, &filtered);
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if app.features_cursor == USERNAME_IDX {
+                    app.username_editing = true;
+                } else {
+                    app.toggle_feature(app.features_cursor);
+                }
+            }
             KeyCode::Backspace => { app.config_search.pop(); }
             KeyCode::Char(c) => {
                 app.config_search.push(c);
@@ -349,11 +381,38 @@ fn word_right(s: &str, cur: usize) -> usize {
 fn handle_model_select(app: &mut App, key: KeyEvent) {
     if handle_help_keys(app, key) { return; }
     use crossterm::event::KeyModifiers;
+
+    // join-room dialog intercepts all keys when open
+    if app.join_room_input.is_some() {
+        match key.code {
+            KeyCode::Esc => { app.join_room_input = None; }
+            KeyCode::Enter => {
+                let uuid = app.join_room_input.take().unwrap_or_default().trim().to_string();
+                if !uuid.is_empty() && !app.remote_url.is_empty() {
+                    let base = app.remote_url.trim_end_matches('/').to_string();
+                    let joined = format!("{base}/id/{uuid}");
+                    app.remote_url = joined;
+                    app.remote_connect_error = None;
+                    app.start_remote_connect();
+                }
+            }
+            KeyCode::Backspace => { if let Some(ref mut s) = app.join_room_input { s.pop(); } }
+            KeyCode::Char(c) => { if let Some(ref mut s) = app.join_room_input { s.push(c); } }
+            _ => {}
+        }
+        return;
+    }
+
     match key.code {
         KeyCode::Tab => { app.toggle_config(); return; }
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.remote_connect_error = None;
             app.screen = crate::app::Screen::RemoteConnect;
+            return;
+        }
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // open join-room dialog (needs a server URL already set)
+            app.join_room_input = Some(String::new());
             return;
         }
         KeyCode::Esc => {

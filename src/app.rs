@@ -82,6 +82,13 @@ pub struct Config {
     pub neuron_mode: NeuronMode,
     pub neuron_presets: Vec<NeuronPreset>,
     pub active_preset: Option<String>,
+    pub username: String,
+}
+
+pub fn default_username() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "user".to_string())
 }
 
 pub fn load_config() -> Config {
@@ -90,6 +97,7 @@ pub fn load_config() -> Config {
         gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2],
         ctx_pow2: true, keep_alive: false, warmup: true, thinking: true,
         neuron_mode: NeuronMode::Manual, neuron_presets: Vec::new(), active_preset: None,
+        username: default_username(),
     };
     let path = match config_path() { Some(p) => p, None => return default };
     let Ok(text) = std::fs::read_to_string(&path) else { return default };
@@ -120,7 +128,9 @@ pub fn load_config() -> Config {
         }).collect())
         .unwrap_or_default();
     let active_preset = val.get("active_preset").and_then(|v| v.as_str()).map(String::from);
-    Config { ctx_strategy, disabled_neurons, gen_params, ctx_pow2, keep_alive, warmup, thinking, neuron_mode, neuron_presets, active_preset }
+    let username = val.get("username").and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(default_username);
+    Config { ctx_strategy, disabled_neurons, gen_params, ctx_pow2, keep_alive, warmup, thinking, neuron_mode, neuron_presets, active_preset, username }
 }
 
 /// Returns true if the neuron has active tool capabilities (shell passthrough or synapse tools).
@@ -370,6 +380,10 @@ pub struct App {
     pub remote_connect_rx: Option<mpsc::Receiver<Result<(std::net::TcpStream, mpsc::Receiver<crate::ws_client::WsClientFrame>), String>>>,
     pub remote_ollama_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
     pub remote_label: Option<String>, // shown in title bar when connected remotely
+    pub username: String,
+    pub room_id: Option<String>,      // UUID of the current WS room
+    pub join_room_input: Option<String>, // Some = join-room dialog open
+    pub username_editing: bool,       // true while editing username in settings
 }
 
 impl App {
@@ -482,6 +496,10 @@ impl App {
             remote_connect_rx: None,
             remote_ollama_rx: None,
             remote_label: None,
+            username: cfg.username,
+            room_id: None,
+            join_room_input: None,
+            username_editing: false,
         }
     }
 
@@ -514,12 +532,20 @@ impl App {
             "neuron_mode":     self.neuron_mode.as_str(),
             "neuron_presets":  presets,
             "active_preset":   self.active_preset,
+            "username":        self.username,
         });
         let _ = std::fs::write(&path, json.to_string());
     }
 
     pub fn confirm_config(&mut self) {
         self.ctx_strategy = CtxStrategy::from_index(self.config_cursor);
+        self.save_config();
+    }
+
+    pub fn set_username(&mut self, name: String) {
+        let name = name.trim().to_string();
+        if !name.is_empty() { self.username = name; }
+        self.username_editing = false;
         self.save_config();
     }
 
@@ -1145,7 +1171,7 @@ impl App {
                 self.screen = Screen::ModelSelect;
             }
 
-            F::Connected { model, .. } => {
+            F::Connected { model, room_id, .. } => {
                 // if models weren't sent (old server or --model in query), populate fallback
                 if self.models.is_empty() {
                     self.models = vec![crate::ollama::ModelEntry {
@@ -1157,6 +1183,7 @@ impl App {
                     self.loading_models = false;
                 }
                 self.selected_model = Some(model);
+                if !room_id.is_empty() { self.room_id = Some(room_id); }
                 if self.stream_state == StreamState::Streaming {
                     self.stream_state = StreamState::Idle;
                 }

@@ -479,8 +479,9 @@ fn draw_config(frame: &mut Frame, app: &App) {
             ]),
             ("Features", &[
                 ("Enter / Space", "Toggle Thinking on / off"),
-                ("Enter",         "Edit Username (navigate down to it)"),
-                ("Esc",           "Cancel username edit"),
+                ("↓  (last item)", "Navigate to Username field"),
+                ("Enter",          "Start editing username"),
+                ("Esc",            "Cancel username edit without saving"),
             ]),
         ];
         draw_help_popup(frame, app, area, SECTIONS);
@@ -741,9 +742,10 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
                 ("type",  "Filter by name"),
                 ("Esc",   "Clear search"),
             ]),
-            ("Remote", &[
-                ("Ctrl+R", "Connect to remote server (--server mode)"),
-                ("Ctrl+J", "Join an existing chat room by UUID"),
+            ("Rooms (multi-user)", &[
+                ("—",      "WS server starts automatically on port 8765"),
+                ("Ctrl+J", "Join a room — type UUID (uses last remote URL as base)"),
+                ("Ctrl+R", "Connect to a remote server URL (ws://host:port)"),
             ]),
             ("General", &[
                 ("Tab",    "Open settings"),
@@ -1400,11 +1402,16 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             ("Chat", &[
                 ("Ctrl+Y  (input)",     "Copy last assistant response"),
                 ("Ctrl+L",              "Clear conversation"),
-                ("Ctrl+J",              "Show room UUID / share URL (WS rooms)"),
                 ("Ctrl+S",              "Export chat to JSON"),
                 ("Ctrl+O",              "Import chat from JSON"),
                 ("Ctrl+C",              "Quit"),
                 ("F1",                  "Toggle this help"),
+            ]),
+            ("Rooms (multi-user)", &[
+                ("Ctrl+J",              "Show room UUID + shareable URL"),
+                ("y  (in popup)",       "Copy URL to clipboard"),
+                ("—",                   "Others join via ws://your-ip:8765/id/{uuid}"),
+                ("—",                   "Joiners see full history + live token stream"),
             ]),
         ];
         draw_help_popup(frame, app, area, SECTIONS);

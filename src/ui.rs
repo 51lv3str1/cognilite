@@ -1007,11 +1007,18 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 } else {
                     Span::raw("")
                 };
-                let model_label = crate::app::model_display_name(
-                    app.selected_model.as_deref().unwrap_or("assistant")
-                ).to_string();
+                // use the tagged identity (username#id) if present, else fall back to selected model
+                let model_label = if let Some(ref tag) = msg.tool_call {
+                    tag.clone()
+                } else {
+                    crate::app::model_display_name(
+                        app.selected_model.as_deref().unwrap_or("assistant")
+                    ).to_string()
+                };
                 let label = if is_selected { format!("► {model_label}") } else { model_label.clone() };
-                let model_color = crate::app::username_color(&model_label);
+                let model_color = crate::app::username_color(
+                    model_label.split('#').next().unwrap_or(&model_label)
+                );
                 lines.push(Line::from(vec![
                     Span::styled(label, Style::default().fg(model_color).add_modifier(Modifier::BOLD)),
                     copy_hint,

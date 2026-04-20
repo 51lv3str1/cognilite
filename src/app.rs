@@ -1275,6 +1275,11 @@ impl App {
                         self.thinking_end_secs = None;
                         self.stream_state = StreamState::Idle;
                         self.stream_started_at = None;
+                        // tag the completed assistant message with our identity for the room
+                        let display = self.display_username();
+                        if let Some(last) = self.messages.last_mut() {
+                            if last.role == Role::Assistant { last.tool_call = Some(display); }
+                        }
                         self.room_sync_done();
                         return;
                     }

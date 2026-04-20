@@ -675,6 +675,8 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
 
         let mut printed_up_to: usize = 0;
         let mut thinking_open = false;
+        let turn_started = std::time::Instant::now();
+        let mut thinking_end_secs: Option<f64> = None;
 
         loop {
             let chunk = match rx.try_recv() {
@@ -722,6 +724,7 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                                 if thinking { send_json(stream, serde_json::json!({"type":"thinking_end"})); }
                                 if thinking_srv { eprintln!("\n[/thinking]"); }
                                 thinking_open = false;
+                                thinking_end_secs = Some(turn_started.elapsed().as_secs_f64());
                             }
                             let token = &last.content[printed_up_to..safe];
                             if !send_json(stream, serde_json::json!({"type":"token","content":token})) { return false; }
@@ -970,16 +973,35 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                 if thinking_open {
                     if thinking { send_json(stream, serde_json::json!({"type":"thinking_end"})); }
                     if thinking_srv { eprintln!("\n[/thinking]"); }
+                    thinking_end_secs = Some(turn_started.elapsed().as_secs_f64());
                 }
-                let stats = if let (Some(pt), Some(et), Some(ed)) =
+                let wall_secs = turn_started.elapsed().as_secs_f64();
+                let (tps, tokens, prompt_eval) = if let (Some(pt), Some(et), Some(ed)) =
                     (chunk.prompt_eval_count, chunk.eval_count, chunk.eval_duration)
                 {
-                    let tps = et as f64 / (ed as f64 / 1_000_000_000.0);
-                    serde_json::json!({"tps": tps, "tokens": et, "prompt_eval": pt})
-                } else {
-                    serde_json::json!({})
-                };
-                return send_json(stream, serde_json::json!({"type":"done","stats":stats}));
+                    (et as f64 / (ed as f64 / 1_000_000_000.0), et, pt)
+                } else { (0.0, 0, 0) };
+                // store stats and tag the assistant message with our identity for the room
+                let identity = app.display_username();
+                if let Some(last) = app.messages.last_mut() {
+                    if last.role == crate::app::Role::Assistant {
+                        last.thinking_secs = thinking_end_secs;
+                        if tokens > 0 {
+                            last.stats = Some(crate::app::TokenStats {
+                                response_tokens:   tokens,
+                                tokens_per_sec:    tps,
+                                thinking_secs:     thinking_end_secs,
+                                prompt_eval_count: prompt_eval,
+                                wall_secs,
+                            });
+                        }
+                        last.tool_call = Some(identity);
+                    }
+                }
+                return send_json(stream, serde_json::json!({
+                    "type": "done",
+                    "stats": {"tps": tps, "tokens": tokens, "prompt_eval": prompt_eval}
+                }));
             }
         }
     }

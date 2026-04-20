@@ -843,13 +843,9 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    if let Some(mood) = &app.current_mood {
-        header_spans.push(Span::styled(format!("  {mood}"), Style::default()));
-    }
-
     if let Some(ref rid) = app.room_id {
         let short = &rid[..rid.len().min(8)];
-        header_spans.push(Span::styled(format!("  ⬡ {short}"), Style::default().fg(DIM)));
+        header_spans.push(Span::styled(format!("  {short}"), Style::default().fg(DIM)));
     }
 
     if let Some(t) = app.copy_notice {
@@ -905,10 +901,11 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                     Span::raw("")
                 };
                 let sender = msg.tool_call.as_deref().unwrap_or(app.username.as_str());
+                let color = crate::app::username_color(sender);
                 let prefix = if is_selected {
-                    Span::styled(format!("► {sender}"), Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD))
+                    Span::styled(format!("► {sender}"), Style::default().fg(color).add_modifier(Modifier::BOLD))
                 } else {
-                    Span::styled(sender.to_string(), Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD))
+                    Span::styled(sender.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD))
                 };
                 lines.push(Line::from(vec![prefix, copy_hint]));
                 // show message text (with @refs stripped to just the filename)
@@ -1010,9 +1007,13 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 } else {
                     Span::raw("")
                 };
-                let label = if is_selected { "► Assistant" } else { "Assistant" };
+                let model_label = crate::app::model_display_name(
+                    app.selected_model.as_deref().unwrap_or("assistant")
+                ).to_string();
+                let label = if is_selected { format!("► {model_label}") } else { model_label.clone() };
+                let model_color = crate::app::username_color(&model_label);
                 lines.push(Line::from(vec![
-                    Span::styled(label, Style::default().fg(ASSISTANT_COLOR).add_modifier(Modifier::BOLD)),
+                    Span::styled(label, Style::default().fg(model_color).add_modifier(Modifier::BOLD)),
                     copy_hint,
                 ]));
                 if msg.content.is_empty() && msg.thinking.is_empty() {
@@ -1059,6 +1060,22 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                     }
                 }
             }
+        }
+        lines.push(Line::raw(""));
+    }
+
+    // live tokens from another room participant (remote TUI mode)
+    if let Some((ref user, ref tokens)) = app.room_live {
+        let user_color = crate::app::username_color(user.split('#').next().unwrap_or(user));
+        lines.push(Line::from(Span::styled(
+            user.clone(),
+            Style::default().fg(user_color).add_modifier(Modifier::BOLD),
+        )));
+        for text_line in wrap_text(tokens.trim(), inner_width) {
+            lines.push(Line::from(Span::raw(format!("  {text_line}"))));
+        }
+        if let Some(last) = lines.last_mut() {
+            last.spans.push(Span::styled("▋", Style::default().fg(DIM)));
         }
         lines.push(Line::raw(""));
     }
@@ -1968,27 +1985,30 @@ fn render_assistant_content(
 ) {
     // thinking block (only present in models that support it)
     if !thinking.is_empty() {
-        let label = if streaming && content.is_empty() {
+        let actively_thinking = streaming && content.is_empty();
+        let label = if actively_thinking {
             "  thinking…".to_string()
         } else if let Some(secs) = thought_secs {
             format!("  thought for {}", format_duration(secs))
         } else {
-            "  thinking…".to_string()
+            "  thought".to_string()
         };
         lines.push(Line::from(Span::styled(
             label,
             Style::default().fg(THINKING_COLOR).add_modifier(Modifier::ITALIC),
         )));
-        for text_line in wrap_text(thinking.trim(), width) {
-            lines.push(Line::from(Span::styled(
-                format!("  {text_line}"),
-                Style::default().fg(THINKING_COLOR),
-            )));
-        }
-        // streaming cursor while still thinking (content not yet started)
-        if streaming && content.is_empty() {
-            if let Some(last) = lines.last_mut() {
-                last.spans.push(Span::styled("▋", Style::default().fg(THINKING_COLOR)));
+        // only expand thinking text while actively streaming, or when we have timing info
+        if actively_thinking || thought_secs.is_some() {
+            for text_line in wrap_text(thinking.trim(), width) {
+                lines.push(Line::from(Span::styled(
+                    format!("  {text_line}"),
+                    Style::default().fg(THINKING_COLOR),
+                )));
+            }
+            if actively_thinking {
+                if let Some(last) = lines.last_mut() {
+                    last.spans.push(Span::styled("▋", Style::default().fg(THINKING_COLOR)));
+                }
             }
         }
         lines.push(Line::raw(""));
@@ -2320,6 +2340,39 @@ fn inline_md(text: &str) -> Vec<Span<'static>> {
             if i < chars.len() { i += 1; }
             spans.push(Span::styled(inner, Style::default().fg(CODE_FG)));
             continue;
+        }
+
+        // #mention or #name#session_id
+        if chars[i] == '#' {
+            let start = i + 1;
+            let mut end = start;
+            let mut seen_inner_hash = false;
+            while end < chars.len() {
+                let c = chars[end];
+                if c.is_alphanumeric() || c == '_' || c == '-' {
+                    end += 1;
+                } else if c == '#' && !seen_inner_hash && end > start {
+                    // allow one embedded # for name#session_id format
+                    seen_inner_hash = true;
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            // don't render a bare '#' or trailing '#'
+            if end > start && chars[end - 1] != '#' {
+                flush!();
+                let name: String = chars[start..end].iter().collect();
+                // color based on base name only so same-named participants share a hue family
+                let base = name.split('#').next().unwrap_or(&name);
+                let color = crate::app::username_color(&base.to_ascii_lowercase());
+                spans.push(Span::styled(
+                    format!("#{name}"),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ));
+                i = end;
+                continue;
+            }
         }
 
         buf.push(chars[i]);

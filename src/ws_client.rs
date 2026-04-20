@@ -25,6 +25,10 @@ pub enum WsClientFrame {
     WarmupDone,
     Error(String),
     Disconnected,
+    /// Messages from other participants that appeared in the shared room
+    RoomUpdate { messages: Vec<crate::app::Message> },
+    /// Live token being streamed by another participant
+    RoomToken { user: String, content: String },
     Unknown,
 }
 
@@ -162,6 +166,60 @@ pub fn connect(url: &str) -> Result<(TcpStream, mpsc::Receiver<WsClientFrame>), 
     Ok((stream, rx))
 }
 
+// ── Headless WS client ────────────────────────────────────────────────────
+
+/// Connect to a room, send one message, stream the response to stdout, then exit.
+/// Unlike the TUI path this doesn't need `client=tui` and never blocks on model selection.
+pub fn run_headless(url: &str, message: &str, thinking_stderr: bool) -> i32 {
+    let (mut tx, rx) = match connect(url) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("cognilite: connection failed: {e}"); return 1; }
+    };
+
+    // handshake loop: warmup → connected; then send message
+    loop {
+        match rx.recv() {
+            Ok(WsClientFrame::WarmupStart) => { eprintln!("[warmup...]"); }
+            Ok(WsClientFrame::WarmupDone)  => { eprintln!("[warmup done]"); }
+            Ok(WsClientFrame::Connected { model, .. }) => {
+                eprintln!("[model: {model}]");
+                break;
+            }
+            Ok(WsClientFrame::Error(e)) => { eprintln!("cognilite: server error: {e}"); return 1; }
+            Ok(WsClientFrame::Disconnected) | Err(_) => {
+                eprintln!("cognilite: disconnected before ready"); return 1;
+            }
+            _ => {}
+        }
+    }
+
+    send_json(&mut tx, serde_json::json!({ "type": "message", "content": message }));
+
+    // stream response
+    let mut exit = 0i32;
+    loop {
+        match rx.recv() {
+            Ok(WsClientFrame::Token(t)) => { print!("{t}"); let _ = std::io::Write::flush(&mut std::io::stdout()); }
+            Ok(WsClientFrame::Thinking(t)) => { if thinking_stderr { eprint!("{t}"); } }
+            Ok(WsClientFrame::ThinkingEnd) => { if thinking_stderr { eprintln!(); } }
+            Ok(WsClientFrame::Tool { command, result, .. }) => {
+                eprintln!("[tool: {command}]\n{result}");
+            }
+            Ok(WsClientFrame::Ask { question, .. }) => {
+                // in headless mode we can't interactively respond; print and abort
+                eprintln!("\n[ask: {question}] (non-interactive — aborting)");
+                exit = 1; break;
+            }
+            Ok(WsClientFrame::Done { .. }) | Ok(WsClientFrame::Disconnected) | Err(_) => break,
+            Ok(WsClientFrame::Error(e)) => { eprintln!("\nerror: {e}"); exit = 1; break; }
+            _ => {}
+        }
+    }
+    println!();
+    write_frame(&mut tx, OP_CLOSE, &[]);
+    exit
+}
+
 // ── Frame parsing ─────────────────────────────────────────────────────────
 
 fn parse_frame(val: serde_json::Value) -> WsClientFrame {
@@ -232,6 +290,33 @@ fn parse_frame(val: serde_json::Value) -> WsClientFrame {
         Some("warmup_start") => WsClientFrame::WarmupStart,
         Some("warmup_done")  => WsClientFrame::WarmupDone,
         Some("error")        => WsClientFrame::Error(s("content")),
+
+        Some("room_update") => WsClientFrame::RoomUpdate {
+            messages: val["messages"].as_array().map(|arr| {
+                arr.iter().map(|m| {
+                    let role = match m["role"].as_str() {
+                        Some("user")      => crate::app::Role::User,
+                        Some("tool")      => crate::app::Role::Tool,
+                        _                 => crate::app::Role::Assistant,
+                    };
+                    let content = m["content"].as_str().unwrap_or("").to_string();
+                    let user = m["user"].as_str().unwrap_or("");
+                    crate::app::Message {
+                        role,
+                        content: content.clone(),
+                        llm_content: content,
+                        images: vec![], attachments: vec![],
+                        thinking: String::new(), thinking_secs: None, stats: None,
+                        tool_call: if user.is_empty() { None } else { Some(user.to_string()) },
+                    }
+                }).collect()
+            }).unwrap_or_default(),
+        },
+
+        Some("room_token") => WsClientFrame::RoomToken {
+            user:    s("user"),
+            content: s("content"),
+        },
 
         // frames the server sends that we don't need to act on in TUI
         Some("pinned") | Some("unpinned") | Some("pong") => WsClientFrame::Unknown,

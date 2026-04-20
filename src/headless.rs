@@ -24,6 +24,7 @@ pub struct HeadlessArgs {
     pub thinking: bool,        // stream thinking to stdout (client receives it)
     pub thinking_stderr: bool, // stream thinking to stderr (server terminal)
     pub server_mode: bool,     // launched by the HTTP server
+    pub username: Option<String>,
 }
 
 impl Default for HeadlessArgs {
@@ -32,7 +33,7 @@ impl Default for HeadlessArgs {
             message: None, model: None, neuron_mode: None, preset: None,
             no_neurons: vec![], temperature: None, top_p: None, repeat_penalty: None,
             ctx_strategy: None, keep_alive: false, pin: vec![], attach: vec![],
-            yes: false, thinking: false, thinking_stderr: false, server_mode: false,
+            yes: false, thinking: false, thinking_stderr: false, server_mode: false, username: None,
         }
     }
 }
@@ -74,6 +75,9 @@ pub fn run(base_url: &str, args: HeadlessArgs) -> i32 {
         }
     };
     eprintln!("[model: {model_name}]");
+    if let Some(u) = args.username {
+        app.username = u;
+    }
     app.selected_model = Some(model_name.clone());
     app.context_length = crate::ollama::fetch_context_length(base_url, &model_name);
     app.stream_state = StreamState::Idle;

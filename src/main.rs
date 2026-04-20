@@ -22,6 +22,17 @@ fn main() -> Result<()> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let ollama_url = get_ollama_url(&argv);
 
+    // headless + remote: connect to a WS room and send one message (non-interactive)
+    if argv.iter().any(|a| a == "--headless") {
+        if let Some(ws_url) = parse_remote_arg_headless(&argv) {
+            if let Some(args) = parse_headless_args(&argv) {
+                let message = args.message.as_deref().unwrap_or("").to_string();
+                let code = ws_client::run_headless(&ws_url, &message, args.thinking_stderr);
+                std::process::exit(code);
+            }
+        }
+    }
+
     if let Some(args) = parse_headless_args(&argv) {
         let code = headless::run(&ollama_url, args);
         std::process::exit(code);
@@ -165,6 +176,9 @@ fn parse_headless_args(argv: &[String]) -> Option<headless::HeadlessArgs> {
             "--thinking" => { ha.thinking = true; }
             "--thinking-stderr" => { ha.thinking_stderr = true; }
             "--server-mode" => { ha.server_mode = true; }
+            "--username" => {
+                i += 1; if i < argv.len() { ha.username = Some(argv[i].clone()); }
+            }
             arg if !arg.starts_with('-') => {
                 ha.message = Some(arg.to_string());
             }
@@ -173,6 +187,35 @@ fn parse_headless_args(argv: &[String]) -> Option<headless::HeadlessArgs> {
         i += 1;
     }
     Some(ha)
+}
+
+/// Like parse_remote_arg but for headless mode: omits `client=tui`, adds username only.
+fn parse_remote_arg_headless(argv: &[String]) -> Option<String> {
+    let pos = argv.iter().position(|a| a == "--remote")?;
+    let mut url = argv.get(pos + 1)?.clone();
+    let mut params: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--thinking" => params.push("thinking=true".into()),
+            "--yes" | "-y" => params.push("yes=true".into()),
+            "--model" | "-m" => {
+                i += 1;
+                if i < argv.len() { params.push(format!("model={}", argv[i])); }
+            }
+            "--username" => {
+                i += 1;
+                if i < argv.len() { params.push(format!("username={}", url_encode(&argv[i]))); }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    // do NOT inject config username — let server set username from model name
+    let sep = if url.contains('?') { '&' } else { '?' };
+    url.push(sep);
+    url.push_str(&params.join("&"));
+    Some(url)
 }
 
 /// Returns the WS URL if --remote <url> is present, with any extra flags appended as query params.

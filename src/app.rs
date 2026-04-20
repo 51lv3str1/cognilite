@@ -85,10 +85,66 @@ pub struct Config {
     pub username: String,
 }
 
+/// Short unique ID (4 hex chars) to disambiguate participants with the same name.
+pub fn new_session_id() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CTR: AtomicU32 = AtomicU32::new(0);
+    let c = CTR.fetch_add(1, Ordering::Relaxed);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u32;
+    format!("{:04x}", t.wrapping_add(c.wrapping_mul(0x9e37)) & 0xffff)
+}
+
 pub fn default_username() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "user".to_string())
+}
+
+/// Strip version tag from model name: "qwen3.6:latest" → "qwen3.6"
+pub fn model_display_name(name: &str) -> &str {
+    name.splitn(2, ':').next().unwrap_or(name)
+}
+
+/// Deterministic color per username from a palette of distinct Catppuccin hues.
+pub fn username_color(username: &str) -> ratatui::style::Color {
+    use ratatui::style::Color;
+    const PALETTE: &[(u8, u8, u8)] = &[
+        (166, 227, 161), // green
+        (137, 180, 250), // blue
+        (249, 226, 175), // yellow
+        (250, 179, 135), // orange
+        (243, 139, 168), // pink/red
+        (116, 199, 236), // sky
+        (148, 226, 213), // teal
+        (180, 190, 254), // lavender
+    ];
+    let mut h: u64 = 5381;
+    for b in username.bytes() { h = h.wrapping_mul(33).wrapping_add(b as u64); }
+    let (r, g, b) = PALETTE[(h as usize) % PALETTE.len()];
+    Color::Rgb(r, g, b)
+}
+
+/// Extract all `#name` or `#name#id` mentions from a message, lowercased.
+pub fn extract_mentions(content: &str) -> Vec<String> {
+    content.split_whitespace()
+        .filter_map(|w| {
+            let w = w.trim_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ':' | ';'));
+            let name = w.strip_prefix('#').filter(|n| !n.is_empty())?;
+            // allow alnum/_/- and at most one embedded '#' (for name#session_id format)
+            let hash_count = name.chars().filter(|&c| c == '#').count();
+            let valid = name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '#');
+            if valid && hash_count <= 1 { Some(name.to_ascii_lowercase()) } else { None }
+        })
+        .collect()
+}
+
+/// Returns true if `display_username` (e.g. "qwen3#a3f2") is explicitly mentioned in `content`.
+/// Only the full `#nombre#xxxx` form matches — or the special keyword `#all`.
+pub fn is_mentioned(display_username: &str, content: &str) -> bool {
+    let full = display_username.to_ascii_lowercase();
+    let mentions = extract_mentions(content);
+    mentions.iter().any(|m| m == &full || m == "all")
 }
 
 pub fn load_config() -> Config {
@@ -354,6 +410,8 @@ pub struct App {
     pub ask_cursor: usize, // selected index for Choice
     // mood
     pub current_mood: Option<String>,
+    // live tokens from another room participant (user, accumulated_tokens)
+    pub room_live: Option<(String, String)>,
     // pending patch waiting for user confirmation
     pub pending_patch: Option<String>,
     // pinned files (always in system prompt)
@@ -381,6 +439,7 @@ pub struct App {
     pub remote_ollama_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
     pub remote_label: Option<String>, // shown in title bar when connected remotely
     pub username: String,
+    pub session_id: String,  // unique per connection, used to disambiguate same-named participants
     pub room_id: Option<String>,      // UUID of the current WS room
     pub shared_room: Option<crate::websocket::SharedRoom>, // shared room state (local server)
     pub room_synced_len: usize,       // how many room messages we've already pulled into app.messages
@@ -481,6 +540,7 @@ impl App {
             ask: None,
             ask_cursor: 0,
             current_mood: None,
+            room_live: None,
             pending_patch: None,
             pinned_files: Vec::new(),
             file_picker: None,
@@ -500,6 +560,7 @@ impl App {
             remote_ollama_rx: None,
             remote_label: None,
             username: cfg.username,
+            session_id: new_session_id(),
             room_id: Some(crate::websocket::new_uuid()),
             shared_room: None,
             room_synced_len: 0,
@@ -563,6 +624,11 @@ impl App {
         Some(format!("{base}/id/{room_id}"))
     }
 
+    /// Full display identity: "username#session_id" — unique per connection.
+    pub fn display_username(&self) -> String {
+        format!("{}#{}", self.username, self.session_id)
+    }
+
     pub fn set_username(&mut self, name: String) {
         let name = name.trim().to_string();
         if !name.is_empty() { self.username = name; }
@@ -576,7 +642,7 @@ impl App {
             if let Ok(mut r) = room.lock() {
                 r.live_tokens.push_str(token);
                 r.live_token_version += 1;
-                r.live_user = self.username.clone();
+                r.live_user = self.display_username();
             }
         }
     }
@@ -604,13 +670,13 @@ impl App {
                 let new = &self.messages[r.messages.len()..];
                 r.messages.extend(new.iter().cloned());
                 r.version += 1;
-                r.live_user = self.username.clone();
+                r.live_user = self.display_username();
                 self.room_synced_len = r.messages.len();
             }
         }
     }
 
-    /// Pull new messages (presence events from WS clients) from the shared room into app.messages.
+    /// Pull new messages from the shared room into app.messages.
     pub fn poll_room(&mut self) {
         let room = match self.shared_room.as_ref() { Some(r) => r.clone(), None => return };
         let r = match room.lock() { Ok(r) => r, Err(_) => return };
@@ -869,10 +935,22 @@ impl App {
             thinking: String::new(),
             thinking_secs: None,
             stats: None,
-            tool_call: Some(self.username.clone()),
+            tool_call: Some(self.display_username()),
         });
         self.room_sync_user_msg();
         self.auto_scroll = true;
+
+        // if the message mentions specific participants and the local model/user is not among them,
+        // don't trigger the local stream — let the mentioned remote participant respond
+        if !extract_mentions(&raw).is_empty() {
+            let local_model = model_display_name(self.selected_model.as_deref().unwrap_or(""));
+            let addressed_here = is_mentioned(&self.display_username(), &raw)
+                || is_mentioned(local_model, &raw);
+            if !addressed_here {
+                return; // directed elsewhere — skip local stream
+            }
+        }
+
         self.start_stream();
     }
 
@@ -1085,19 +1163,24 @@ impl App {
                             return;
                         }
                         // detect <mood>...</mood> — update state, strip from display, continue streaming
-                        let mood_info: Option<String> = if let Some(last) = self.messages.last() {
-                            if last.role == Role::Assistant { extract_mood_tag(&last.content) } else { None }
+                        // check both content and thinking (native thinking models emit <mood> in thinking tokens)
+                        let mood_info: Option<(String, bool)> = if let Some(last) = self.messages.last() {
+                            if last.role == Role::Assistant {
+                                extract_mood_tag(&last.content).map(|e| (e, false))
+                                    .or_else(|| extract_mood_tag(&last.thinking).map(|e| (e, true)))
+                            } else { None }
                         } else { None };
-                        if let Some(emoji) = mood_info {
+                        if let Some((emoji, in_thinking)) = mood_info {
                             if let Some(last) = self.messages.last_mut() {
-                                let scan_from = last.content.rfind("</think>").map(|i| i + 8).unwrap_or(0);
-                                if let Some(p) = last.content[scan_from..].find("<mood>") {
+                                let target = if in_thinking { &mut last.thinking } else { &mut last.content };
+                                let scan_from = target.rfind("</think>").map(|i| i + 8).unwrap_or(0);
+                                if let Some(p) = target[scan_from..].find("<mood>") {
                                     let abs = scan_from + p;
-                                    if let Some(end) = last.content[abs..].find("</mood>") {
+                                    if let Some(end) = target[abs..].find("</mood>") {
                                         let tag_end = abs + end + 7;
-                                        let before = last.content[..abs].trim_end().to_string();
-                                        let after = last.content[tag_end..].to_string();
-                                        last.content = before + &after;
+                                        let before = target[..abs].trim_end().to_string();
+                                        let after = target[tag_end..].to_string();
+                                        *target = before + &after;
                                     }
                                 }
                             }
@@ -1414,6 +1497,22 @@ impl App {
             }
 
             F::Mood(emoji) => { self.current_mood = Some(emoji); }
+
+            F::RoomUpdate { messages } => {
+                for msg in messages {
+                    self.messages.push(msg);
+                }
+                self.room_live = None; // clear any live preview — turn is done
+                self.auto_scroll = true;
+            }
+
+            F::RoomToken { user, content } => {
+                match &mut self.room_live {
+                    Some((u, tokens)) if u == &user => tokens.push_str(&content),
+                    _ => self.room_live = Some((user, content)),
+                }
+                self.auto_scroll = true;
+            }
 
             F::FilePreview { path, content } => {
                 self.open_file_panel_remote(&path, &content);

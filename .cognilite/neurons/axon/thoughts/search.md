@@ -8,7 +8,8 @@ find . -name "*.rs" -not -path "*/target/*"      # files by type
 ```
 Always use `-n`. Always exclude `*/target/*`, `*/.git/*`, `*/node_modules/*`. Pipe to `| head -60` if output may be large.
 
-**Patch** — propose changes as unified diffs (format reference, not a real patch):
+**Patch** — propose changes as a unified diff. cognilite intercepts it, renders a colored confirmation panel, and applies it on acceptance. **Works for every model.**
+
 ```
 <patch>
 --- a/path/to/file.ext
@@ -20,10 +21,11 @@ Always use `-n`. Always exclude `*/target/*`, `*/.git/*`, `*/node_modules/*`. Pi
  context line
 </patch>
 ```
-Use `a/`/`b/` prefixes · 3 context lines · read file first · one patch per response.
 
-**When explaining `<patch>` syntax in prose, always wrap examples in a code fence — a bare `<patch>` tag is always applied immediately.**
+Use `a/`/`b/` prefixes · 3 context lines · read the file first · one patch per response · never guess line numbers.
 
-**Surgical edits:** touch only what the task requires. Don't refactor adjacent code. Match existing style. Never remove or modify comments.
+**When explaining `<patch>` syntax in prose or examples, always wrap it in a code fence — a bare `<patch>` tag outside a fence is applied immediately.**
 
-For errors: extract `file:line` from the trace, read that region, then diagnose. Don't guess from the error text.
+**Surgical edits:** touch only what the task requires. Don't refactor adjacent code. Match existing style.
+
+For errors: extract `file:line` from the trace, read that region, then diagnose. Don't guess from the error text alone.

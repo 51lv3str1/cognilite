@@ -1400,11 +1400,54 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             ("Chat", &[
                 ("Ctrl+Y  (input)",     "Copy last assistant response"),
                 ("Ctrl+L",              "Clear conversation"),
+                ("Ctrl+J",              "Show room UUID / share URL (WS rooms)"),
+                ("Ctrl+S",              "Export chat to JSON"),
+                ("Ctrl+O",              "Import chat from JSON"),
                 ("Ctrl+C",              "Quit"),
                 ("F1",                  "Toggle this help"),
             ]),
         ];
         draw_help_popup(frame, app, area, SECTIONS);
+    }
+
+    // ── Room share popup ────────────────────────────────────────────────────
+    if app.show_room_share {
+        if let Some(ref room_id) = app.room_id.clone() {
+            let share_url = app.room_share_url().unwrap_or_else(|| format!("(URL desconocida)/id/{room_id}"));
+            let popup_w = area.width.min(70);
+            let popup_h = 6u16;
+            let px = area.x + (area.width.saturating_sub(popup_w)) / 2;
+            let py = area.y + (area.height.saturating_sub(popup_h)) / 2;
+            let popup_area = Rect { x: px, y: py, width: popup_w, height: popup_h };
+            frame.render_widget(ratatui::widgets::Clear, popup_area);
+            let block = Block::default()
+                .title(Span::styled(" Compartir sala ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(ACCENT))
+                .style(Style::default().bg(BG));
+            let inner = block.inner(popup_area);
+            frame.render_widget(block, popup_area);
+
+            let lines = vec![
+                Line::from(vec![
+                    Span::styled(" UUID:  ", Style::default().fg(DIM)),
+                    Span::styled(room_id.as_str(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled(" URL:   ", Style::default().fg(DIM)),
+                    Span::styled(share_url.as_str(), Style::default().fg(ACCENT)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(" y", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD)),
+                    Span::styled(" copiar URL   ", Style::default().fg(DIM)),
+                    Span::styled(" Esc", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD)),
+                    Span::styled(" cerrar", Style::default().fg(DIM)),
+                ]),
+            ];
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
     }
 }
 

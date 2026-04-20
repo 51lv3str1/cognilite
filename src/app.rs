@@ -384,6 +384,7 @@ pub struct App {
     pub room_id: Option<String>,      // UUID of the current WS room
     pub join_room_input: Option<String>, // Some = join-room dialog open
     pub username_editing: bool,       // true while editing username in settings
+    pub show_room_share: bool,        // show room share popup in chat
 }
 
 impl App {
@@ -500,6 +501,7 @@ impl App {
             room_id: None,
             join_room_input: None,
             username_editing: false,
+            show_room_share: false,
         }
     }
 
@@ -540,6 +542,17 @@ impl App {
     pub fn confirm_config(&mut self) {
         self.ctx_strategy = CtxStrategy::from_index(self.config_cursor);
         self.save_config();
+    }
+
+    pub fn room_share_url(&self) -> Option<String> {
+        let room_id = self.room_id.as_ref()?;
+        // strip any existing /id/... path from remote_url to get the base
+        let base = self.remote_url.splitn(2, "/id/").next()
+            .unwrap_or(&self.remote_url)
+            .trim_end_matches('/')
+            .to_string();
+        if base.is_empty() { return None; }
+        Some(format!("{base}/id/{room_id}"))
     }
 
     pub fn set_username(&mut self, name: String) {

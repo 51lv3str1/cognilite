@@ -7,12 +7,15 @@ use std::sync::Mutex;
 static STDIN_LOCK: Mutex<()> = Mutex::new(());
 
 /// Starts the HTTP server. Blocks until the process is killed.
-pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool) {
+pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool, rooms: crate::websocket::RoomRegistry) {
     let addr = format!("{host}:{port}");
-    let listener = TcpListener::bind(&addr).unwrap_or_else(|e| {
-        eprintln!("[server] failed to bind {addr}: {e}");
-        std::process::exit(1);
-    });
+    let listener = match TcpListener::bind(&addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("[server] failed to bind {addr}: {e}");
+            return; // embedded server: don't exit the whole process
+        }
+    };
     eprintln!("[server] cognilite listening on http://{addr}");
     eprintln!("[server] POST /chat  {{\"message\": \"...\", ...}}");
     eprintln!("[server] WS    ws://{addr}/id/{{uuid}}  — join room");
@@ -22,8 +25,6 @@ pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool) {
         Ok(p) => p,
         Err(e) => { eprintln!("[server] cannot resolve binary path: {e}"); return; }
     };
-
-    let rooms = crate::websocket::new_room_registry();
 
     for stream in listener.incoming() {
         match stream {
@@ -239,8 +240,8 @@ fn resolve_room(path: &str, rooms: &crate::websocket::RoomRegistry) -> (String, 
     let room = {
         let mut map = rooms.lock().unwrap();
         map.entry(id.clone()).or_insert_with(|| Arc::new(Mutex::new(crate::websocket::RoomState {
-            messages: vec![],
-            version:  0,
+            messages: vec![], version: 0,
+            live_tokens: String::new(), live_token_version: 0, live_user: String::new(),
         }))).clone()
     };
     (id, room)

@@ -382,6 +382,7 @@ pub struct App {
     pub remote_label: Option<String>, // shown in title bar when connected remotely
     pub username: String,
     pub room_id: Option<String>,      // UUID of the current WS room
+    pub shared_room: Option<crate::websocket::SharedRoom>, // shared room state (local server)
     pub join_room_input: Option<String>, // Some = join-room dialog open
     pub username_editing: bool,       // true while editing username in settings
     pub show_room_share: bool,        // show room share popup in chat
@@ -499,6 +500,7 @@ impl App {
             remote_label: None,
             username: cfg.username,
             room_id: Some(crate::websocket::new_uuid()),
+            shared_room: None,
             join_room_input: None,
             username_editing: false,
             show_room_share: false,
@@ -546,12 +548,16 @@ impl App {
 
     pub fn room_share_url(&self) -> Option<String> {
         let room_id = self.room_id.as_ref()?;
-        // strip any existing /id/... path from remote_url to get the base
-        let base = self.remote_url.splitn(2, "/id/").next()
-            .unwrap_or(&self.remote_url)
-            .trim_end_matches('/')
-            .to_string();
-        if base.is_empty() { return None; }
+        // if connected via --remote, derive base from remote_url
+        // otherwise use the embedded local server address
+        let base = if !self.remote_url.is_empty() {
+            self.remote_url.splitn(2, "/id/").next()
+                .unwrap_or(&self.remote_url)
+                .trim_end_matches('/')
+                .to_string()
+        } else {
+            format!("ws://{}:{}", crate::DEFAULT_SERVER_HOST, crate::DEFAULT_SERVER_PORT)
+        };
         Some(format!("{base}/id/{room_id}"))
     }
 
@@ -560,6 +566,41 @@ impl App {
         if !name.is_empty() { self.username = name; }
         self.username_editing = false;
         self.save_config();
+    }
+
+    /// Push a live token to the shared room so WS clients can stream it in real time.
+    pub fn room_push_token(&self, token: &str) {
+        if let Some(ref room) = self.shared_room {
+            if let Ok(mut r) = room.lock() {
+                r.live_tokens.push_str(token);
+                r.live_token_version += 1;
+                r.live_user = self.username.clone();
+            }
+        }
+    }
+
+    /// Sync the full message history to the shared room and clear live tokens.
+    pub fn room_sync_done(&self) {
+        if let Some(ref room) = self.shared_room {
+            if let Ok(mut r) = room.lock() {
+                r.messages = self.messages.clone();
+                r.version += 1;
+                r.live_tokens.clear();
+                r.live_token_version = 0;
+                r.live_user.clear();
+            }
+        }
+    }
+
+    /// Sync user message to the room immediately when the user hits Enter.
+    pub fn room_sync_user_msg(&self) {
+        if let Some(ref room) = self.shared_room {
+            if let Ok(mut r) = room.lock() {
+                r.messages = self.messages.clone();
+                r.version += 1;
+                r.live_user = self.username.clone();
+            }
+        }
     }
 
     pub fn toggle_perf(&mut self, index: usize) {
@@ -806,8 +847,9 @@ impl App {
             thinking: String::new(),
             thinking_secs: None,
             stats: None,
-            tool_call: None,
+            tool_call: Some(self.username.clone()),
         });
+        self.room_sync_user_msg();
         self.auto_scroll = true;
         self.start_stream();
     }
@@ -922,6 +964,10 @@ impl App {
                                     last.thinking.push_str(&t);
                                 }
                             }
+                        }
+                        // broadcast token to WS room clients
+                        if !msg.content.is_empty() {
+                            self.room_push_token(&msg.content);
                         }
                         // detect a complete tool call in the accumulated content
                         if let Some(last) = self.messages.last() {
@@ -1124,6 +1170,7 @@ impl App {
                         self.thinking_end_secs = None;
                         self.stream_state = StreamState::Idle;
                         self.stream_started_at = None;
+                        self.room_sync_done();
                         return;
                     }
                 }

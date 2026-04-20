@@ -15,8 +15,8 @@ use color_eyre::Result;
 use app::App;
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
-const DEFAULT_SERVER_HOST: &str = "0.0.0.0";
-const DEFAULT_SERVER_PORT: u16 = 8765;
+pub const DEFAULT_SERVER_HOST: &str = "0.0.0.0";
+pub const DEFAULT_SERVER_PORT: u16 = 8765;
 
 fn main() -> Result<()> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     }
 
     if let Some((host, port, thinking)) = parse_server_args(&argv) {
-        server::run(&ollama_url, &host, port, thinking);
+        server::run(&ollama_url, &host, port, thinking, crate::websocket::new_room_registry());
         return Ok(());
     }
 
@@ -62,6 +62,25 @@ fn main() -> Result<()> {
         crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
         let mut app = App::new(ollama_url.clone());
         App::prewarm_highlight();
+
+        // start embedded WS server so others can join the local chat
+        let rooms = crate::websocket::new_room_registry();
+        if let Some(ref room_id) = app.room_id.clone() {
+            use std::sync::{Arc, Mutex};
+            let room: crate::websocket::SharedRoom = Arc::new(Mutex::new(crate::websocket::RoomState {
+                messages: vec![], version: 0,
+                live_tokens: String::new(), live_token_version: 0, live_user: String::new(),
+            }));
+            rooms.lock().unwrap().insert(room_id.clone(), room.clone());
+            app.shared_room = Some(room);
+        }
+        {
+            let rooms = rooms.clone();
+            let host = DEFAULT_SERVER_HOST.to_string();
+            let ollama = ollama_url.clone();
+            std::thread::spawn(move || server::run(&ollama, &host, DEFAULT_SERVER_PORT, false, rooms));
+        }
+
         load_models(&mut app);
         let result = run_loop(terminal, &mut app);
         let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);

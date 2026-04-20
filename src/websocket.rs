@@ -17,6 +17,10 @@ use crate::headless::safe_print_boundary;
 pub struct RoomState {
     pub messages: Vec<crate::app::Message>,
     pub version:  u64,
+    // live token stream from the current turn (cleared when turn completes)
+    pub live_tokens:        String,
+    pub live_token_version: u64,
+    pub live_user:          String, // username of whoever is currently generating
 }
 
 pub type SharedRoom    = Arc<Mutex<RoomState>>;
@@ -371,11 +375,11 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
     let ctx_str = app.context_length.map(|n| format!("{}k", n/1024)).unwrap_or_else(|| "?".into());
     eprintln!("[ws] {peer} connected — {model_name} (room {room_id})");
 
-    // load room history and track version
-    let mut known_version = {
+    // load room history and track versions
+    let (mut known_version, mut known_token_version, mut sent_token_len) = {
         let r = room.lock().unwrap();
         app.messages = r.messages.clone();
-        r.version
+        (r.version, r.live_token_version, r.live_tokens.len())
     };
 
     // send history snapshot to client before `connected` frame
@@ -403,7 +407,24 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
 
     // outer loop: one frame per interaction
     loop {
-        // ── poll room for messages from other users ──────────────────────
+        // ── poll room for live tokens from local TUI ─────────────────────
+        {
+            let r = room.lock().unwrap();
+            if r.live_token_version != known_token_version {
+                let new_part = &r.live_tokens[sent_token_len.min(r.live_tokens.len())..];
+                if !new_part.is_empty() {
+                    if !send_json(&mut stream, serde_json::json!({
+                        "type": "room_token",
+                        "user": r.live_user,
+                        "content": new_part,
+                    })) { break; }
+                }
+                sent_token_len = r.live_tokens.len();
+                known_token_version = r.live_token_version;
+            }
+        }
+
+        // ── poll room for completed messages from other users ─────────────
         let current_version = room.lock().unwrap().version;
         if current_version != known_version {
             let new_msgs: Vec<serde_json::Value> = {
@@ -421,6 +442,9 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
                 app.messages = r.messages.clone();
             }
             known_version = current_version;
+            let r = room.lock().unwrap();
+            known_token_version = r.live_token_version;
+            sent_token_len = r.live_tokens.len();
         }
 
         let (opcode, payload) = match read_frame_timeout(&mut stream) {

@@ -18,11 +18,11 @@ If the user asks about previous actions or results already in the conversation, 
 
 ## Shell capabilities
 
-To run a shell command, use a `<tool>` tag on its own line (replace YOUR_COMMAND with the actual command):
+To run a shell command, emit a `<tool>` tag on its own line with the actual command inside. Commands run via `sh -c` in the working directory. Pipes, redirections, and multi-command sequences (`&&`, `|`, `;`) all work.
 
-<tool>YOUR_COMMAND</tool>
+Never write "Tool result:" yourself or invent output — only the real tag produces real results. One command per tag — never put prose or multi-paragraph content inside a tool tag.
 
-Commands run via `sh -c` in the working directory. Pipes, redirections, and multi-command sequences (`&&`, `|`, `;`) all work. Never write "Tool result:" yourself or invent output — only the real tag produces real results.
+When explaining or showing tag syntax in prose, always wrap in a code fence — a bare tag outside a code fence **always** executes immediately.
 
 ## Error handling
 

@@ -791,6 +791,13 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             app.copy_notice = None;
         }
     }
+    if let Some((t, ref msg)) = app.status_notice.clone() {
+        if t.elapsed().as_secs_f64() < 3.0 {
+            header_spans.push(Span::styled(format!("  ✓ {msg}"), Style::default().fg(USER_COLOR)));
+        } else {
+            app.status_notice = None;
+        }
+    }
     frame.render_widget(Paragraph::new(Line::from(header_spans)), header_area);
 
     // --- pinned files bar ---

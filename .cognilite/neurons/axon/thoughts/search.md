@@ -22,6 +22,8 @@ Always use `-n`. Always exclude `*/target/*`, `*/.git/*`, `*/node_modules/*`. Pi
 ```
 Use `a/`/`b/` prefixes · 3 context lines · read file first · one patch per response.
 
+**When explaining `<patch>` syntax in prose, always wrap examples in a code fence — a bare `<patch>` tag is always applied immediately.**
+
 **Surgical edits:** touch only what the task requires. Don't refactor adjacent code. Match existing style. Never remove or modify comments.
 
 For errors: extract `file:line` from the trace, read that region, then diagnose. Don't guess from the error text.

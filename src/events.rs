@@ -572,6 +572,8 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
         KeyCode::Char('y') if ctrl => app.copy_last_response(),
         KeyCode::Char('l') if ctrl => app.clear_chat(),
         KeyCode::Char('p') if ctrl => app.open_file_picker(),
+        KeyCode::Char('s') if ctrl => app.export_chat(),
+        KeyCode::Char('o') if ctrl => app.open_file_picker_load(),
 
         // ── cursor movement ──────────────────────────────────────────────────
         KeyCode::Left  => { app.input_move_left();  app.update_completion(); }

@@ -133,7 +133,7 @@ pub fn fuzzy_match(query: &str, target: &str) -> bool {
     target.to_lowercase().contains(&query.to_lowercase())
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Role {
     User,
     Assistant,
@@ -170,6 +170,12 @@ pub enum FilePickerEntry {
     File(String), // relative path from working_dir
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilePickerMode {
+    Pin,      // default: toggle pinned files
+    LoadChat, // Ctrl+O: load a saved chat JSON
+}
+
 pub struct FilePicker {
     pub current_dir: PathBuf,
     pub entries: Vec<FilePickerEntry>,
@@ -179,10 +185,11 @@ pub struct FilePicker {
     pub preview_scroll: usize,
     pub pending_path: Option<PathBuf>,
     pub highlight_rx: Option<mpsc::Receiver<(PathBuf, Vec<Line<'static>>)>>,
-    pub loading: bool, // true while waiting for ls_result from server
+    pub loading: bool,
+    pub mode: FilePickerMode,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TokenStats {
     pub response_tokens: u64,
     pub tokens_per_sec: f64,
@@ -191,16 +198,16 @@ pub struct TokenStats {
     pub prompt_eval_count: u64,     // tokens Ollama actually re-evaluated (0 = cache hit)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AttachmentKind {
     Text,
     Image,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Attachment {
-    pub filename: String,   // basename, for display
-    pub path: PathBuf,      // resolved absolute path, for reopening
+    pub filename: String,
+    pub path: PathBuf,
     pub kind: AttachmentKind,
     pub size: usize,
 }
@@ -214,7 +221,7 @@ pub struct FilePanel {
     pub reloaded_at: Option<std::time::Instant>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: String,       // display content (without file bodies)
@@ -328,6 +335,7 @@ pub struct App {
     pub show_help: bool,
     pub help_scroll: u16,
     pub copy_notice: Option<std::time::Instant>,
+    pub status_notice: Option<(std::time::Instant, String)>,
     // chat focus / history navigation
     pub chat_focus: ChatFocus,
     pub history_cursor: usize, // index into messages[] for selected block
@@ -450,6 +458,7 @@ impl App {
             show_help: false,
             help_scroll: 0,
             copy_notice: None,
+            status_notice: None,
             chat_focus: ChatFocus::Input,
             history_cursor: 0,
             ask: None,
@@ -1859,6 +1868,19 @@ impl App {
             current_dir: dir, entries, cursor: 0, query: String::new(),
             preview: vec![], preview_scroll: 0,
             pending_path: None, highlight_rx: None, loading: false,
+            mode: FilePickerMode::Pin,
+        });
+        self.update_preview();
+    }
+
+    pub fn open_file_picker_load(&mut self) {
+        let dir = self.working_dir.clone();
+        let entries = load_picker_entries(&dir, &dir);
+        self.file_picker = Some(FilePicker {
+            current_dir: dir, entries, cursor: 0, query: String::new(),
+            preview: vec![], preview_scroll: 0,
+            pending_path: None, highlight_rx: None, loading: false,
+            mode: FilePickerMode::LoadChat,
         });
         self.update_preview();
     }
@@ -1874,6 +1896,7 @@ impl App {
                 current_dir: dir, entries: vec![], cursor: 0, query: String::new(),
                 preview: vec![], preview_scroll: 0,
                 pending_path: None, highlight_rx: None, loading: true,
+                mode: FilePickerMode::Pin,
             });
         } else if let Some(fp) = &mut self.file_picker {
             fp.current_dir = dir;
@@ -2035,6 +2058,13 @@ impl App {
                 }
             }
             FilePickerEntry::File(display) => {
+                let mode = self.file_picker.as_ref().map(|fp| fp.mode.clone()).unwrap_or(FilePickerMode::Pin);
+                if mode == FilePickerMode::LoadChat {
+                    let path = self.file_picker.as_ref().unwrap().current_dir.join(&display);
+                    self.file_picker = None;
+                    self.load_chat(path);
+                    return;
+                }
                 if self.ws_tx.is_some() {
                     // insert @path into the message input and close picker
                     let at_path = format!("@{display}");
@@ -2575,6 +2605,52 @@ impl App {
         self.completion = None;
     }
 
+    pub fn export_chat(&mut self) {
+        if self.messages.is_empty() { return; }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let filename = format!("cognilite_chat_{now}.json");
+        let path = self.working_dir.join(&filename);
+        match serde_json::to_string_pretty(&self.messages) {
+            Ok(json) => match std::fs::write(&path, json) {
+                Ok(_) => {
+                    self.status_notice = Some((std::time::Instant::now(), format!("saved: {filename}")));
+                }
+                Err(e) => {
+                    self.status_notice = Some((std::time::Instant::now(), format!("export failed: {e}")));
+                }
+            },
+            Err(e) => {
+                self.status_notice = Some((std::time::Instant::now(), format!("serialize failed: {e}")));
+            }
+        }
+    }
+
+    pub fn load_chat(&mut self, path: PathBuf) {
+        match std::fs::read_to_string(&path) {
+            Ok(json) => match serde_json::from_str::<Vec<Message>>(&json) {
+                Ok(messages) => {
+                    self.messages = messages;
+                    self.scroll = u16::MAX;
+                    self.auto_scroll = true;
+                    self.injected_neurons.clear();
+                    let name = path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("chat");
+                    self.status_notice = Some((std::time::Instant::now(), format!("loaded: {name}")));
+                }
+                Err(e) => {
+                    self.status_notice = Some((std::time::Instant::now(), format!("load failed: {e}")));
+                }
+            },
+            Err(e) => {
+                self.status_notice = Some((std::time::Instant::now(), format!("read failed: {e}")));
+            }
+        }
+    }
+
     /// Returns the (char_pos_of_@, partial_path_after_@) if the cursor is
     /// inside an @token (no space between @ and cursor).
     fn at_token_before_cursor(&self) -> Option<(usize, &str)> {
@@ -2613,6 +2689,11 @@ impl App {
 
 /// Returns the content between `<tool>` and `</tool>` if both tags are present,
 /// ignoring anything inside `<think>...</think>` blocks (model reasoning).
+/// Returns true if `pos` falls inside a triple-backtick code fence in `text`.
+fn is_in_code_block(text: &str, pos: usize) -> bool {
+    text[..pos].matches("```").count() % 2 == 1
+}
+
 pub fn extract_tool_call(content: &str) -> Option<&str> {
     // if a <think> block is open but not yet closed, we're still inside reasoning — skip
     let scan = match content.rfind("</think>") {
@@ -2624,7 +2705,9 @@ pub fn extract_tool_call(content: &str) -> Option<&str> {
             content
         }
     };
-    let start = scan.find("<tool>")? + 6;
+    let tag_pos = scan.find("<tool>")?;
+    if is_in_code_block(scan, tag_pos) { return None; }
+    let start = tag_pos + 6;
     let end   = scan.find("</tool>")?;
     if end >= start { Some(&scan[start..end]) } else { None }
 }
@@ -3049,6 +3132,7 @@ pub fn extract_ask_tag(content: &str) -> Option<(AskKind, String)> {
         }
     };
     let open = scan.find("<ask")?;
+    if is_in_code_block(scan, open) { return None; }
     let tag_close = scan[open..].find('>')?;
     let inner_start = open + tag_close + 1;
     let close = scan.find("</ask>")?;
@@ -3080,7 +3164,9 @@ pub fn extract_patch_tag(content: &str) -> Option<String> {
             content
         }
     };
-    let start = scan.find("<patch>")? + 7;
+    let tag_pos = scan.find("<patch>")?;
+    if is_in_code_block(scan, tag_pos) { return None; }
+    let start = tag_pos + 7;
     let end   = scan.find("</patch>")?;
     if end >= start { Some(scan[start..end].to_string()) } else { None }
 }
@@ -3127,6 +3213,7 @@ pub fn extract_preview_tag(content: &str) -> Option<String> {
         }
     };
     let start = scan.find("<preview")?;
+    if is_in_code_block(scan, start) { return None; }
     let tag_str = &scan[start..];
     let end = tag_str.find("/>")?;
     let inner = &tag_str[8..end]; // skip "<preview"
@@ -3143,7 +3230,9 @@ pub fn extract_mood_tag(content: &str) -> Option<String> {
             content
         }
     };
-    let start = scan.find("<mood>")? + 6;
+    let tag_pos = scan.find("<mood>")?;
+    if is_in_code_block(scan, tag_pos) { return None; }
+    let start = tag_pos + 6;
     let end   = scan.find("</mood>")?;
     if end >= start { Some(scan[start..end].trim().to_string()) } else { None }
 }
@@ -3156,7 +3245,9 @@ pub fn extract_load_neuron_tag(content: &str) -> Option<String> {
             content
         }
     };
-    let start = scan.find("<load_neuron>")? + 13;
+    let tag_pos = scan.find("<load_neuron>")?;
+    if is_in_code_block(scan, tag_pos) { return None; }
+    let start = tag_pos + 13;
     let end   = scan.find("</load_neuron>")?;
     if end >= start { Some(scan[start..end].trim().to_string()) } else { None }
 }

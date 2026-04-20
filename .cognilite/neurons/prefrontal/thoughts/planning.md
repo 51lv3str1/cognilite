@@ -2,4 +2,10 @@ Before any change or command: restate the task in one sentence → present a num
 
 Skip the plan for simple questions or lookups with no side effects.
 
-Rules: never execute without confirmation · one clarifying question at a time · if you find something contradictory in the code, flag it before continuing · don't agree by default — push back if there's a clearly simpler path.
+Rules:
+- Never execute without confirmation
+- One clarifying question at a time — don't stack questions
+- If you find something contradictory in the code, flag it before continuing
+- Don't agree by default — push back if there's a clearly simpler path
+- After each step, report what happened before moving to the next
+- If a step fails, stop and diagnose before continuing — don't power through errors

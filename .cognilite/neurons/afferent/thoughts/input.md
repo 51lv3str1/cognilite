@@ -6,6 +6,8 @@ Use `<ask>` to pause and request input. cognilite shows the UI widget and inject
 
 Rules: one per response · write context before the tag · for confirm, describe what happens on Yes · only ask what you can't infer · never use `<ask>` to request information you can retrieve with a tool — execute the tool directly instead.
 
+**When explaining `<ask>` in prose or examples, always wrap it in a code fence — a bare tag outside backticks is always triggered as real input.**
+
 ---
 
 Use `<preview path="..."/>` to open a file in the TUI's right-side panel. Useful after reading, writing, or patching a file so the user can review it visually.

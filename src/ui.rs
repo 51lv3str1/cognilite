@@ -478,7 +478,9 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 ("Enter / Space", "Toggle on / off"),
             ]),
             ("Features", &[
-                ("Enter / Space", "Toggle on / off"),
+                ("Enter / Space", "Toggle Thinking on / off"),
+                ("Enter",         "Edit Username (navigate down to it)"),
+                ("Esc",           "Cancel username edit"),
             ]),
         ];
         draw_help_popup(frame, app, area, SECTIONS);
@@ -739,10 +741,14 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
                 ("type",  "Filter by name"),
                 ("Esc",   "Clear search"),
             ]),
+            ("Remote", &[
+                ("Ctrl+R", "Connect to remote server (--server mode)"),
+                ("Ctrl+J", "Join an existing chat room by UUID"),
+            ]),
             ("General", &[
-                ("Tab",     "Open settings"),
-                ("F1",      "Toggle this help"),
-                ("Ctrl+C",  "Quit"),
+                ("Tab",    "Open settings"),
+                ("F1",     "Toggle this help"),
+                ("Ctrl+C", "Quit"),
             ]),
         ];
         draw_help_popup(frame, app, area, SECTIONS);

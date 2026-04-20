@@ -1412,31 +1412,33 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
 
     // ── Room share popup ────────────────────────────────────────────────────
     if app.show_room_share {
-        if let Some(ref room_id) = app.room_id.clone() {
-            let share_url = app.room_share_url().unwrap_or_else(|| format!("(URL desconocida)/id/{room_id}"));
-            let popup_w = area.width.min(70);
-            let popup_h = 6u16;
-            let px = area.x + (area.width.saturating_sub(popup_w)) / 2;
-            let py = area.y + (area.height.saturating_sub(popup_h)) / 2;
-            let popup_area = Rect { x: px, y: py, width: popup_w, height: popup_h };
-            frame.render_widget(ratatui::widgets::Clear, popup_area);
-            let block = Block::default()
-                .title(Span::styled(" Compartir sala ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(ACCENT))
-                .style(Style::default().bg(BG));
-            let inner = block.inner(popup_area);
-            frame.render_widget(block, popup_area);
+        let popup_w = area.width.min(70);
+        let popup_h = 6u16;
+        let px = area.x + (area.width.saturating_sub(popup_w)) / 2;
+        let py = area.y + (area.height.saturating_sub(popup_h)) / 2;
+        let popup_area = Rect { x: px, y: py, width: popup_w, height: popup_h };
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        let block = Block::default()
+            .title(Span::styled(" Sala ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .style(Style::default().bg(BG));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
 
-            let lines = vec![
+        let room_id_owned = app.room_id.clone();
+        let lines = if let Some(ref room_id) = room_id_owned {
+            let share_url = app.room_share_url()
+                .unwrap_or_else(|| format!("(conectá via --remote primero)/id/{room_id}"));
+            vec![
                 Line::from(vec![
                     Span::styled(" UUID:  ", Style::default().fg(DIM)),
                     Span::styled(room_id.as_str(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
                 ]),
                 Line::from(vec![
                     Span::styled(" URL:   ", Style::default().fg(DIM)),
-                    Span::styled(share_url.as_str(), Style::default().fg(ACCENT)),
+                    Span::styled(share_url, Style::default().fg(ACCENT)),
                 ]),
                 Line::from(""),
                 Line::from(vec![
@@ -1445,9 +1447,26 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                     Span::styled(" Esc", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD)),
                     Span::styled(" cerrar", Style::default().fg(DIM)),
                 ]),
-            ];
-            frame.render_widget(Paragraph::new(lines), inner);
-        }
+            ]
+        } else {
+            vec![
+                Line::from(vec![
+                    Span::styled(" No estás en ninguna sala.", Style::default().fg(DIM)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(" Conectate a un servidor con ", Style::default().fg(DIM)),
+                    Span::styled("Ctrl+R", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                    Span::styled(" en la pantalla de modelos.", Style::default().fg(DIM)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(" Esc", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD)),
+                    Span::styled(" cerrar", Style::default().fg(DIM)),
+                ]),
+            ]
+        };
+        frame.render_widget(Paragraph::new(lines), inner);
     }
 }
 

@@ -650,7 +650,7 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
         KeyCode::Char('p') if ctrl => app.open_file_picker(),
         KeyCode::Char('s') if ctrl => app.export_chat(),
         KeyCode::Char('o') if ctrl => app.open_file_picker_load(),
-        KeyCode::Char('j') if ctrl => { if app.room_id.is_some() { app.show_room_share = true; } }
+        KeyCode::Char('j') if ctrl => { app.show_room_share = true; }
 
         // ── cursor movement ──────────────────────────────────────────────────
         KeyCode::Left  => { app.input_move_left();  app.update_completion(); }

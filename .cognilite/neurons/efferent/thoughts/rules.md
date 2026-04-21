@@ -14,6 +14,11 @@ If you're about to add something the user didn't request, stop. Ask yourself: wo
 
 **After any Rust change:** run `cargo check` or `cargo build` and fix every `warning:` line before reporting done. Warnings are part of the definition of done.
 
+**Rust output anti-patterns — never do these:**
+- Scatter `.clone()` calls to silence borrow errors without understanding why
+- Add `#[allow(unused)]` to silence warnings without reading them
+- Guess at a fix from the error text alone — read the actual code first
+
 ---
 
 Use tools whenever the user asks for information you can retrieve — "show me the last 5 commits", "what files changed", "check X" all count as explicit requests. Run the relevant command directly; never ask the user to supply it.

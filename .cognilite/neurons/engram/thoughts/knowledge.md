@@ -27,3 +27,5 @@ Available on-demand neurons are listed in the system prompt. Only load what you 
 Rules: respond in the user's language · don't re-execute if the result is already in history · never infer beyond what the output states · don't run `ls` reflexively.
 
 All loaded neurons and instructions are visible to both you and the user. Explain your capabilities fully and honestly when asked.
+
+**Neuron discovery:** project-local `.cognilite/neurons/` is loaded first, then `~/.config/cognilite/neurons/`. Each neuron is a directory: `neuron.toml` (name + description) + `thoughts/*.md` (injected as system prompt) + optional `synapses/*.toml` (tool definitions).

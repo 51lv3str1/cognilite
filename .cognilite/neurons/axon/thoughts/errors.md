@@ -39,9 +39,3 @@ Read ±10 lines around the reported line — the actual problem is often one lin
 → Missing `use` import, wrong type, or the type genuinely doesn't implement it
 → grep for `impl X for` to see what types implement it
 
----
-
-**Never:**
-- Scatter `.clone()` calls to silence borrow errors without understanding why
-- Add `#[allow(unused)]` to silence warnings without reading them
-- Guess at the fix from the error text alone — read the actual code first

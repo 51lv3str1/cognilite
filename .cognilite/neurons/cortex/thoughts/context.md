@@ -14,6 +14,4 @@
 
 **Source layout:** `src/app.rs` (core state + streaming loop) · `src/ui.rs` (ratatui rendering) · `src/events.rs` (input handling) · `src/ollama.rs` (API calls) · `src/websocket.rs` (WS server + room state) · `src/ws_client.rs` (WS client frames + headless remote mode) · `src/server.rs` (HTTP server + WS upgrade) · `src/headless.rs` (non-interactive CLI mode) · `src/synapse.rs` (neuron loader)
 
-**Neuron discovery:** project-local `.cognilite/neurons/` first, then `~/.config/cognilite/neurons/`. Each neuron is a directory with `neuron.toml` + `thoughts/*.md` + optional `synapses/*.toml`.
-
 For implementation details, read the source directly — don't guess.

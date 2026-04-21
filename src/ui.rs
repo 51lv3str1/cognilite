@@ -849,6 +849,12 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     } else {
         header_spans.push(Span::styled("  normal", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)));
     }
+    {
+        let budget = app.gen_params[3] as u64;
+        let label = if budget == 0 { "think:∞".to_string() } else { format!("think:{budget}") };
+        let color = if budget == 0 { Color::DarkGray } else { Color::Rgb(137, 180, 250) };
+        header_spans.push(Span::styled(format!("  {label}"), Style::default().fg(color).add_modifier(Modifier::BOLD)));
+    }
     if let Some(t) = app.copy_notice {
         if t.elapsed().as_secs_f64() < 2.0 {
             header_spans.push(Span::styled("  ✓ copied", Style::default().fg(USER_COLOR)));
@@ -1374,6 +1380,8 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             hint("Tab", "browse history"),
             Span::raw("  "),
             hint("Shift+Tab", "mode"),
+            Span::raw("  "),
+            hint("Ctrl+T", "think budget"),
             Span::raw("  "),
             hint("F1", "help"),
         ])

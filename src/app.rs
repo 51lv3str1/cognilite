@@ -784,6 +784,22 @@ impl App {
         self.save_config();
     }
 
+    pub fn cycle_thinking_budget(&mut self) {
+        const PRESETS: &[f64] = &[0.0, 512.0, 1024.0, 2048.0, 4096.0];
+        let cur = self.gen_params[3];
+        let next_idx = PRESETS.iter().position(|&p| p == cur)
+            .map(|i| (i + 1) % PRESETS.len())
+            .unwrap_or(0);
+        self.gen_params[3] = PRESETS[next_idx];
+        let label = if PRESETS[next_idx] == 0.0 {
+            "think: unlimited".to_string()
+        } else {
+            format!("think: {} tok", PRESETS[next_idx] as u64)
+        };
+        self.status_notice = Some((std::time::Instant::now(), label));
+        self.save_config();
+    }
+
     pub fn cycle_mode(&mut self) {
         let label = match (self.plan_mode, self.auto_accept) {
             (false, false) => { self.plan_mode = true;  "plan mode" }

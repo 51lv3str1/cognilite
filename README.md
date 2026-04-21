@@ -55,7 +55,7 @@ cognilite  ›  gemma4:e2b  ○  😊  ctx 12% / 128k
 - **Multiline input** — `Ctrl+N` inserts a newline; input box grows automatically; full readline-style editing
 - **Paste support** — multiline paste from clipboard; newlines preserved
 - **Stop generation** — `Esc` while streaming cancels the current response
-- **Settings screen** — five tabs: context strategy, neurons, generation parameters, performance flags, features; persisted to `~/.config/cognilite/config.json`
+- **Settings screen** — four tabs: general (username), context strategy, neurons, features (generation params + performance flags); persisted to `~/.config/cognilite/config.json`
 - **Remote TUI mode** — connect to a remote cognilite server over WebSocket (`ws://host:port`) and use the full TUI as if the model were local: model selection, file picker browsing remote directories, `<preview>` tag opens files from the server in the local file panel, warmup spinner, all tag-driven widgets
 - **Multi-user rooms** — the local TUI always starts an embedded WS server; press `Ctrl+J` in chat to see/copy the room share URL; other users connect via `--remote` and join the same room; messages and live tokens sync in real time; mention a participant with `#username#id` or `#all` to trigger an auto-response from the AI
 - **Chat history export / import** — `Ctrl+S` saves the current conversation to a JSON file; `Ctrl+O` opens a file-picker to load a previously exported conversation
@@ -390,7 +390,7 @@ The username is persisted to `~/.config/cognilite/config.json`.
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate items |
-| `Enter` / `Space` | Toggle option (Context, Neurons, Performance, Features tabs) |
+| `Enter` / `Space` | Toggle option (Context, Neurons, Features tabs) |
 | `←` / `→` | Decrease / increase value (Generation tab) |
 | `r` | Reset to default (Generation tab) |
 | `Type` | Filter items in current tab |
@@ -676,6 +676,12 @@ shell = true
 
 Open with `Tab` from the model select screen. Persisted to `~/.config/cognilite/config.json`.
 
+### General tab
+
+| Field | Description |
+|-------|-------------|
+| **Username** | Display name shown in chat and shared with room participants |
+
 ### Context tab
 
 | Strategy | Behavior |
@@ -687,7 +693,9 @@ Open with `Tab` from the model select screen. Persisted to `~/.config/cognilite/
 
 Toggle individual neurons on or off. Disabled neurons are excluded from the system prompt. Each neuron shows an estimated token cost (`~Ntok`) so you can see which ones are heavy before enabling them.
 
-### Generation tab
+### Features tab
+
+**Generation** — use `←` / `→` to adjust, `r` to reset:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -695,22 +703,14 @@ Toggle individual neurons on or off. Disabled neurons are excluded from the syst
 | `top_p` | 0.9 | Nucleus sampling cutoff |
 | `repeat_penalty` | 1.1 | Repetition penalty |
 
-Use `←` / `→` to adjust, `r` to reset.
-
-### Performance tab
+**Performance** — use `Enter` / `Space` to toggle:
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | **Stable num_ctx** | on | Rounds context to powers of 2 to preserve KV cache across requests |
 | **Keep model alive** | off | Passes `keep_alive: -1` — prevents model unloading between requests |
 | **Warm-up cache** | on | Pre-fills KV cache with the system prompt on model load |
-
-### Features tab
-
-| Option | Default | Description |
-|--------|---------|-------------|
 | **Thinking** | on | Sends `"think": true` to Ollama — enables extended thinking for supported models (QwQ, Gemma 3, etc.) |
-| **Username** | `$USER` | Display name shown in chat and shared with room participants; editable inline |
 
 ## Architecture
 

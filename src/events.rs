@@ -76,7 +76,8 @@ fn handle_config(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => { app.toggle_config(); return; }
         KeyCode::Tab => {
-            app.config_section = (app.config_section + 1) % 5;
+            app.username_editing = false;
+            app.config_section = (app.config_section + 1) % 4;
             app.config_search.clear();
             return;
         }
@@ -84,6 +85,23 @@ fn handle_config(app: &mut App, key: KeyEvent) {
     }
 
     if app.config_section == 0 {
+        // ── General ──────────────────────────────────────────────────────────
+        if app.username_editing {
+            match key.code {
+                KeyCode::Enter     => { let name = app.username.clone(); app.set_username(name); }
+                KeyCode::Esc       => { app.username_editing = false; }
+                KeyCode::Backspace => { app.username.pop(); }
+                KeyCode::Char(c)   => { app.username.push(c); }
+                _ => {}
+            }
+            return;
+        }
+        if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
+            app.username_editing = true;
+        }
+
+    } else if app.config_section == 1 {
+        // ── Context ───────────────────────────────────────────────────────────
         const CTX_LABELS: &[&str] = &["Dynamic context", "Full context"];
         let filtered: Vec<usize> = CTX_LABELS.iter().enumerate()
             .filter(|(_, l)| fuzzy_match(&app.config_search, l))
@@ -103,7 +121,7 @@ fn handle_config(app: &mut App, key: KeyEvent) {
             }
             _ => {}
         }
-    } else if app.config_section == 1 {
+    } else if app.config_section == 2 {
         // Preset name input captures all keys
         if app.preset_name_input.is_some() {
             match key.code {
@@ -201,96 +219,49 @@ fn handle_config(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-    } else if app.config_section == 2 {
-        let filtered: Vec<usize> = crate::app::GEN_PARAMS.iter().enumerate()
-            .filter(|(_, (name, _, _, _, _, _))| fuzzy_match(&app.config_search, name))
+    } else {
+        // ── Features (Generation + Performance) ───────────────────────────────
+        // cursor 0-2 = gen params, 3-5 = perf flags, 6 = thinking
+        const FEATURE_ITEMS: &[&str] = &[
+            "temperature", "top_p", "repeat_penalty",
+            "Stable num_ctx", "Keep model alive", "Warm-up cache", "Thinking",
+        ];
+        let filtered: Vec<usize> = FEATURE_ITEMS.iter().enumerate()
+            .filter(|(_, l)| fuzzy_match(&app.config_search, l))
             .map(|(i, _)| i)
             .collect();
         match key.code {
-            KeyCode::Up    => nav_prev(&mut app.param_cursor, &filtered),
-            KeyCode::Down  => nav_next(&mut app.param_cursor, &filtered),
-            KeyCode::Left  | KeyCode::Char('-') => app.param_adjust(-1.0),
-            KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=') => app.param_adjust(1.0),
-            KeyCode::Char('r') => app.param_reset(),
+            KeyCode::Up   => nav_prev(&mut app.features_cursor, &filtered),
+            KeyCode::Down => nav_next(&mut app.features_cursor, &filtered),
+            KeyCode::Left | KeyCode::Char('-') if app.features_cursor < 3 => {
+                app.param_cursor = app.features_cursor;
+                app.param_adjust(-1.0);
+            }
+            KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=') if app.features_cursor < 3 => {
+                app.param_cursor = app.features_cursor;
+                app.param_adjust(1.0);
+            }
+            KeyCode::Char('r') if app.features_cursor < 3 => {
+                app.param_cursor = app.features_cursor;
+                app.param_reset();
+            }
+            KeyCode::Enter | KeyCode::Char(' ') if app.features_cursor >= 3 => {
+                if app.features_cursor < 6 {
+                    app.toggle_perf(app.features_cursor - 3);
+                } else {
+                    app.toggle_feature(0); // Thinking is feature index 0
+                }
+            }
             KeyCode::Backspace => {
                 if !app.config_search.is_empty() { app.config_search.pop(); }
-                else { app.param_reset(); }
+                else if app.features_cursor < 3 {
+                    app.param_cursor = app.features_cursor;
+                    app.param_reset();
+                }
             }
             KeyCode::Char(c) if c != '-' && c != '+' && c != '=' && c != 'r' => {
                 app.config_search.push(c);
-                let new_filtered: Vec<usize> = crate::app::GEN_PARAMS.iter().enumerate()
-                    .filter(|(_, (name, _, _, _, _, _))| fuzzy_match(&app.config_search, name))
-                    .map(|(i, _)| i).collect();
-                snap_cursor(&mut app.param_cursor, &new_filtered);
-            }
-            _ => {}
-        }
-    } else if app.config_section == 3 {
-        const PERF_LABELS: &[&str] = &["Stable num_ctx", "Keep model alive", "Warm-up cache"];
-        let filtered: Vec<usize> = PERF_LABELS.iter().enumerate()
-            .filter(|(_, l)| fuzzy_match(&app.config_search, l))
-            .map(|(i, _)| i)
-            .collect();
-        match key.code {
-            KeyCode::Up   => nav_prev(&mut app.perf_cursor, &filtered),
-            KeyCode::Down => nav_next(&mut app.perf_cursor, &filtered),
-            KeyCode::Enter | KeyCode::Char(' ') => app.toggle_perf(app.perf_cursor),
-            KeyCode::Backspace => { app.config_search.pop(); }
-            KeyCode::Char(c) => {
-                app.config_search.push(c);
-                let new_filtered: Vec<usize> = PERF_LABELS.iter().enumerate()
-                    .filter(|(_, l)| fuzzy_match(&app.config_search, l))
-                    .map(|(i, _)| i).collect();
-                snap_cursor(&mut app.perf_cursor, &new_filtered);
-            }
-            _ => {}
-        }
-    } else {
-        const FEATURE_LABELS: &[&str] = &["Thinking"];
-        const USERNAME_IDX: usize = FEATURE_LABELS.len(); // index of the username row
-
-        // username editing mode: intercept all keys
-        if app.username_editing {
-            match key.code {
-                KeyCode::Enter => { let name = app.username.clone(); app.set_username(name); }
-                KeyCode::Esc   => { app.username_editing = false; }
-                KeyCode::Backspace => { app.username.pop(); }
-                KeyCode::Char(c)   => { app.username.push(c); }
-                _ => {}
-            }
-            return;
-        }
-
-        let filtered: Vec<usize> = FEATURE_LABELS.iter().enumerate()
-            .filter(|(_, l)| fuzzy_match(&app.config_search, l))
-            .map(|(i, _)| i)
-            .collect();
-        match key.code {
-            KeyCode::Up => {
-                if app.features_cursor == USERNAME_IDX {
-                    app.features_cursor = filtered.last().copied().unwrap_or(0);
-                } else {
-                    nav_prev(&mut app.features_cursor, &filtered);
-                }
-            }
-            KeyCode::Down => {
-                if app.features_cursor == *filtered.last().unwrap_or(&0) {
-                    app.features_cursor = USERNAME_IDX;
-                } else {
-                    nav_next(&mut app.features_cursor, &filtered);
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                if app.features_cursor == USERNAME_IDX {
-                    app.username_editing = true;
-                } else {
-                    app.toggle_feature(app.features_cursor);
-                }
-            }
-            KeyCode::Backspace => { app.config_search.pop(); }
-            KeyCode::Char(c) => {
-                app.config_search.push(c);
-                let new_filtered: Vec<usize> = FEATURE_LABELS.iter().enumerate()
+                let new_filtered: Vec<usize> = FEATURE_ITEMS.iter().enumerate()
                     .filter(|(_, l)| fuzzy_match(&app.config_search, l))
                     .map(|(i, _)| i).collect();
                 snap_cursor(&mut app.features_cursor, &new_filtered);

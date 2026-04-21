@@ -107,7 +107,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
         .split(content_area);
 
     // ── Tab bar ───────────────────────────────────────────────────────────────
-    let tabs = ["Context", "Neurons", "Generation", "Performance", "Features"];
+    let tabs = ["General", "Context", "Neurons", "Features"];
     let mut tab_spans: Vec<Span> = Vec::new();
     for (i, name) in tabs.iter().enumerate() {
         if i > 0 { tab_spans.push(Span::styled("  ·  ", Style::default().fg(THINKING_COLOR))); }
@@ -141,6 +141,24 @@ fn draw_config(frame: &mut Frame, app: &App) {
 
     match app.config_section {
         0 => {
+            // ── General ───────────────────────────────────────────────────────
+            let value_style = if app.username_editing {
+                Style::default().fg(ACCENT).bg(SURFACE)
+            } else {
+                Style::default().fg(DIM)
+            };
+            let value_text = if app.username_editing {
+                format!("  ›  {}█", app.username)
+            } else {
+                format!("  —  {}", app.username)
+            };
+            frame.render_widget(Paragraph::new(Line::from(vec![
+                Span::styled("     ", Style::default().bg(SURFACE)),
+                Span::styled("Username", Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD)),
+                Span::styled(value_text, value_style),
+            ])), Rect { x: inner.x, y: items_y, width: inner.width, height: 1 });
+        }
+        1 => {
             // ── Context strategy ──────────────────────────────────────────────
             struct CtxOption<'a> { label: &'a str, desc: &'a str, strategy: CtxStrategy }
             let ctx_options = [
@@ -169,7 +187,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 y += 1;
             }
         }
-        1 => {
+        2 => {
             // ── Neurons ───────────────────────────────────────────────────────
             use crate::app::neuron_is_tooling;
 
@@ -347,107 +365,85 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 }
             }
         }
-        2 => {
-            // ── Generation params ─────────────────────────────────────────────
-            let filtered: Vec<(usize, &(&str, &str, f64, f64, f64, f64))> = crate::app::GEN_PARAMS.iter().enumerate()
-                .filter(|(_, (name, _, _, _, _, _))| crate::app::fuzzy_match(&app.config_search, name))
-                .collect();
-            for (row, (orig_idx, (name, desc, default, _, _, _))) in filtered.iter().enumerate() {
-                let cursor = *orig_idx == app.param_cursor;
-                let value = app.gen_params[*orig_idx];
-                let is_default = (value - default).abs() < 0.001;
-                let bg         = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
-                let name_style = bg.patch(if cursor { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) });
-                let val_style  = bg.patch(if is_default { Style::default().fg(DIM) } else { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) });
-                let dim_style  = bg.patch(Style::default().fg(THINKING_COLOR));
-                frame.render_widget(Paragraph::new(Line::from(vec![
-                    Span::styled(format!("  {name:<16}"), name_style),
-                    Span::styled("← ", dim_style),
-                    Span::styled(format!("{value:.2}"), val_style),
-                    Span::styled(" →", dim_style),
-                    Span::styled(format!("  {desc}"), dim_style),
-                ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
-            }
-        }
-        3 => {
-            // ── Performance ───────────────────────────────────────────────────
-            struct PerfOption<'a> { label: &'a str, desc: &'a str, value: bool }
-            let perf_options = [
-                PerfOption { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache", value: app.ctx_pow2   },
-                PerfOption { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",  value: app.keep_alive },
-                PerfOption { label: "Warm-up cache",    desc: "Pre-fill KV cache with the system prompt on model load",    value: app.warmup     },
-            ];
-            let filtered: Vec<(usize, &PerfOption)> = perf_options.iter().enumerate()
-                .filter(|(_, o)| crate::app::fuzzy_match(&app.config_search, o.label))
-                .collect();
-            for (row, (orig_idx, opt)) in filtered.iter().enumerate() {
-                let cursor = *orig_idx == app.perf_cursor;
-                let (marker, circle_fg) = if opt.value { ("●", ACCENT) } else { ("○", DIM) };
-                let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
-                let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
-                let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
-                frame.render_widget(Paragraph::new(Line::from(vec![
-                    Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
-                    Span::styled(opt.label, name_style),
-                    Span::styled(format!("  —  {}", opt.desc), desc_style),
-                ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
-            }
-        }
         _ => {
-            // ── Features ──────────────────────────────────────────────────────
-            struct FeatureOption<'a> { label: &'a str, desc: &'a str, value: bool }
-            let feature_options = [
-                FeatureOption { label: "Thinking", desc: "Enable extended thinking for supported models (think: true)", value: app.thinking },
+            // ── Features (Generation + Performance) ───────────────────────────
+            // cursor 0-2 = gen params, 3-5 = perf flags, 6 = thinking
+            struct Toggle<'a> { label: &'a str, desc: &'a str, value: bool }
+            let toggles = [
+                Toggle { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache", value: app.ctx_pow2   },
+                Toggle { label: "Keep model alive", desc: "Prevent Ollama from unloading the model between requests",  value: app.keep_alive },
+                Toggle { label: "Warm-up cache",    desc: "Pre-fill KV cache with the system prompt on model load",    value: app.warmup     },
+                Toggle { label: "Thinking",         desc: "Enable extended thinking for supported models (think: true)", value: app.thinking },
             ];
-            let filtered: Vec<(usize, &FeatureOption)> = feature_options.iter().enumerate()
-                .filter(|(_, o)| crate::app::fuzzy_match(&app.config_search, o.label))
-                .collect();
-            let mut row_offset = 0usize;
-            for (row, (orig_idx, opt)) in filtered.iter().enumerate() {
-                let cursor = *orig_idx == app.features_cursor;
-                let (marker, circle_fg) = if opt.value { ("●", ACCENT) } else { ("○", DIM) };
-                let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
-                let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
-                let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
-                frame.render_widget(Paragraph::new(Line::from(vec![
-                    Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
-                    Span::styled(opt.label, name_style),
-                    Span::styled(format!("  —  {}", opt.desc), desc_style),
-                ])), Rect { x: inner.x, y: items_y + row as u16, width: inner.width, height: 1 });
-                row_offset = row + 1;
+
+            let mut y = items_y;
+
+            // Generation sub-section
+            let gen_any = (0..3).any(|i| crate::app::fuzzy_match(&app.config_search, crate::app::GEN_PARAMS[i].0));
+            if gen_any {
+                frame.render_widget(Paragraph::new(Line::from(
+                    Span::styled("  Generation", Style::default().fg(DIM).add_modifier(Modifier::BOLD))
+                )), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                y += 1;
+                for orig_idx in 0..3usize {
+                    let (name, desc, default, _, _, _) = crate::app::GEN_PARAMS[orig_idx];
+                    if !crate::app::fuzzy_match(&app.config_search, name) { continue; }
+                    let cursor = orig_idx == app.features_cursor;
+                    let value = app.gen_params[orig_idx];
+                    let is_default = (value - default).abs() < 0.001;
+                    let bg        = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+                    let name_style = bg.patch(if cursor { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) });
+                    let val_style  = bg.patch(if is_default { Style::default().fg(DIM) } else { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) });
+                    let dim_style  = bg.patch(Style::default().fg(THINKING_COLOR));
+                    frame.render_widget(Paragraph::new(Line::from(vec![
+                        Span::styled(format!("  {name:<16}"), name_style),
+                        Span::styled("← ", dim_style),
+                        Span::styled(format!("{value:.2}"), val_style),
+                        Span::styled(" →", dim_style),
+                        Span::styled(format!("  {desc}"), dim_style),
+                    ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                    y += 1;
+                }
+                y += 1;
             }
 
-            // username field (always shown when not filtered out)
-            if crate::app::fuzzy_match(&app.config_search, "Username") {
-                let username_row = items_y + row_offset as u16;
-                let cursor = app.features_cursor == feature_options.len();
-                let label_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
-                let value_style = if app.username_editing {
-                    Style::default().fg(ACCENT).bg(SURFACE)
-                } else if cursor {
-                    Style::default().fg(DIM).bg(SURFACE)
-                } else {
-                    Style::default().fg(DIM)
-                };
-                let value_text = if app.username_editing {
-                    format!("  ›  {}█", app.username)
-                } else {
-                    format!("  —  {}", app.username)
-                };
-                frame.render_widget(Paragraph::new(Line::from(vec![
-                    Span::styled("     ", if cursor { Style::default().bg(SURFACE) } else { Style::default() }),
-                    Span::styled("Username", label_style),
-                    Span::styled(value_text, value_style),
-                ])), Rect { x: inner.x, y: username_row, width: inner.width, height: 1 });
+            // Performance sub-section (indices 3-6)
+            let perf_any = (0..4usize).any(|i| crate::app::fuzzy_match(&app.config_search, toggles[i].label));
+            if perf_any {
+                frame.render_widget(Paragraph::new(Line::from(
+                    Span::styled("  Performance", Style::default().fg(DIM).add_modifier(Modifier::BOLD))
+                )), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                y += 1;
+                for (ti, opt) in toggles.iter().enumerate() {
+                    let feature_idx = 3 + ti;
+                    if !crate::app::fuzzy_match(&app.config_search, opt.label) { continue; }
+                    let cursor = feature_idx == app.features_cursor;
+                    let (marker, circle_fg) = if opt.value { ("●", ACCENT) } else { ("○", DIM) };
+                    let name_style = if cursor { Style::default().fg(Color::White).bg(SURFACE).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+                    let desc_style = if cursor { Style::default().fg(DIM).bg(SURFACE) } else { Style::default().fg(DIM) };
+                    let bg = if cursor { Style::default().bg(SURFACE) } else { Style::default() };
+                    frame.render_widget(Paragraph::new(Line::from(vec![
+                        Span::styled(format!("  {marker} "), bg.patch(Style::default().fg(circle_fg))),
+                        Span::styled(opt.label, name_style),
+                        Span::styled(format!("  —  {}", opt.desc), desc_style),
+                    ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
+                    y += 1;
+                }
             }
         }
     }
 
     // ── Hints ─────────────────────────────────────────────────────────────────
-    let action_hint: Vec<Span> = if app.config_section == 2 {
-        vec![hint("←/→", "adjust"), Span::raw("  "), hint("r", "reset")]
-    } else if app.config_section == 0 {
+    let action_hint: Vec<Span> = if app.config_section == 0 {
+        if app.username_editing {
+            vec![hint("Enter", "save"), Span::raw("  "), hint("Esc", "cancel")]
+        } else {
+            vec![hint("Enter", "edit")]
+        }
+    } else if app.config_section == 1 {
         vec![hint("Enter", "confirm")]
+    } else if app.config_section == 3 && app.features_cursor < 3 {
+        vec![hint("←/→", "adjust"), Span::raw("  "), hint("r", "reset")]
     } else {
         vec![hint("Enter", "toggle")]
     };
@@ -460,28 +456,26 @@ fn draw_config(frame: &mut Frame, app: &App) {
         const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("Navigation", &[
                 ("↑  ↓",          "Move selection"),
-                ("Tab",           "Next section"),
+                ("Tab",           "Next tab"),
                 ("type",          "Filter list"),
                 ("Esc",           "Close settings"),
             ]),
-            ("Context strategy", &[
+            ("General", &[
+                ("Enter",         "Edit username"),
+                ("Esc",           "Cancel edit without saving"),
+            ]),
+            ("Context", &[
                 ("Enter",         "Confirm selection"),
             ]),
             ("Neurons", &[
                 ("Enter / Space", "Toggle on / off"),
             ]),
-            ("Generation params", &[
+            ("Features — Generation", &[
                 ("←  →",          "Adjust value"),
                 ("r",             "Reset to default"),
             ]),
-            ("Performance", &[
+            ("Features — Performance", &[
                 ("Enter / Space", "Toggle on / off"),
-            ]),
-            ("Features", &[
-                ("Enter / Space", "Toggle Thinking on / off"),
-                ("↓  (last item)", "Navigate to Username field"),
-                ("Enter",          "Start editing username"),
-                ("Esc",            "Cancel username edit without saving"),
             ]),
         ];
         draw_help_popup(frame, app, area, SECTIONS);

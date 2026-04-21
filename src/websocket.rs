@@ -763,7 +763,6 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                             last.content = last.content.trim_end().to_string();
                         }
                     }
-                    eprintln!("[ws tool: {call}]");
                     app.handle_tool_call(&call);
                     // send after execution so the frame includes the result
                     let (label, result) = app.messages.last()
@@ -801,7 +800,6 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                             }
                             app.injected_neurons.insert(name.clone());
                             if !send_json(stream, serde_json::json!({"type":"load_neuron","name":&name})) { return false; }
-                            eprintln!("[ws load_neuron: {name}]");
                             let size = content.len();
                             app.messages.push(Message {
                                 role: Role::Tool,

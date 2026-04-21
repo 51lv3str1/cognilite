@@ -1187,6 +1187,25 @@ impl App {
                             }
                             self.current_mood = Some(emoji);
                         }
+                        // detect <preview path="..."/> — open file panel
+                        let preview_path: Option<String> = if let Some(last) = self.messages.last() {
+                            if last.role == Role::Assistant { extract_preview_tag(&last.content) } else { None }
+                        } else { None };
+                        if let Some(rel_path) = preview_path {
+                            if let Some(last) = self.messages.last_mut() {
+                                let sf = last.content.rfind("</think>").map(|i| i + 8).unwrap_or(0);
+                                if let Some(p) = last.content[sf..].find("<preview") {
+                                    let abs = sf + p;
+                                    if let Some(end) = last.content[abs..].find("/>") {
+                                        let tag_end = abs + end + 2;
+                                        let before = last.content[..abs].trim_end().to_string();
+                                        last.content = before + &last.content[tag_end..];
+                                    }
+                                }
+                            }
+                            let path = self.working_dir.join(&rel_path);
+                            self.open_file_panel(path);
+                        }
                         // detect <load_neuron>Name</load_neuron> — inject neuron and restart stream
                         let load_name: Option<String> = if let Some(last) = self.messages.last() {
                             if last.role == Role::Assistant { extract_load_neuron_tag(&last.content) } else { None }
@@ -1276,8 +1295,11 @@ impl App {
                         self.thinking_end_secs = None;
                         self.stream_state = StreamState::Idle;
                         self.stream_started_at = None;
-                        // tag the completed assistant message with our identity for the room
-                        let display = self.display_username();
+                        // tag the completed assistant message with model identity for the room
+                        let display = match self.selected_model.as_deref() {
+                            Some(m) if !m.is_empty() => format!("{}#{}", model_display_name(m), self.session_id),
+                            _ => self.display_username(),
+                        };
                         if let Some(last) = self.messages.last_mut() {
                             if last.role == Role::Assistant { last.tool_call = Some(display); }
                         }

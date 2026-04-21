@@ -1032,10 +1032,10 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                     copy_hint,
                 ]));
                 if msg.content.is_empty() && msg.thinking.is_empty() {
-                    // only the current streaming message reaches here
+                    // no tokens yet — model is prefilling the KV cache
                     let label = match app.stream_started_at {
                         Some(started) => format!(
-                            "  Processing… {}▋",
+                            "  waiting… {}▋",
                             format_duration(started.elapsed().as_secs_f64())
                         ),
                         None => "  ▋".to_string(),

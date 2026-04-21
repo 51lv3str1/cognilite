@@ -1,5 +1,6 @@
 mod app;
 mod clipboard;
+mod tools;
 mod headless;
 mod server;
 mod websocket;

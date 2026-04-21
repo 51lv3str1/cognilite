@@ -2524,6 +2524,23 @@ impl App {
         let (cmd, args) = call.split_once(' ').unwrap_or((call, ""));
         let args = args.trim().trim_start_matches('@');
 
+        // built-in native tools — checked before synapses
+        // write_file and edit_file use the full call body (multi-line content after cmd)
+        let full_args = call.splitn(2, char::is_whitespace).nth(1).unwrap_or("").trim_start_matches('@');
+        let builtin_result = match cmd {
+            "read_file"  => Some(crate::tools::read_file(full_args, &self.working_dir)),
+            "write_file" => Some(crate::tools::write_file(full_args, &self.working_dir)),
+            "edit_file"  => Some(crate::tools::edit_file(full_args, &self.working_dir)),
+            "grep_files" => Some(crate::tools::grep_files(full_args, &self.working_dir)),
+            "glob_files" => Some(crate::tools::glob_files(full_args, &self.working_dir)),
+            _ => None,
+        };
+
+        if let Some(result) = builtin_result {
+            let tool_label = format!("built-in \u{203a} {cmd}");
+            return self.push_tool_result(result, tool_label, args);
+        }
+
         // search across all neurons for a matching behaviour
         let found = self.neurons.iter().find_map(|n| {
             n.synapses.iter().find(|s| s.trigger == cmd).map(|s| (n.name.clone(), s.clone()))
@@ -2551,6 +2568,10 @@ impl App {
             .or_else(|| shell_neuron.map(|n| format!("{} \u{203a} {}", n.name, cmd)))
             .unwrap_or_else(|| cmd.to_string());
 
+        self.push_tool_result(result, tool_label, args);
+    }
+
+    fn push_tool_result(&mut self, result: String, tool_label: String, args: &str) {
         let filename = Path::new(args)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -2576,7 +2597,7 @@ impl App {
             images: vec![],
             attachments: vec![Attachment {
                 filename,
-                path: PathBuf::new(), // tool outputs don't correspond to a real file path
+                path: PathBuf::new(),
                 kind: AttachmentKind::Text,
                 size,
             }],

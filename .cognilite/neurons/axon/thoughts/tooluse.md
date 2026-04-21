@@ -1,3 +1,51 @@
+## Native tools (prefer these over shell commands)
+
+These tools are built into cognilite — faster, safer, no shell injection risk.
+
+### `read_file` — read a file with line numbers
+```
+read_file src/app.rs               # full file (up to 500 lines)
+read_file src/app.rs 100 200       # lines 100–200 only
+```
+Use this instead of `cat`, `head`, or `sed -n`. Always shows line numbers.
+
+### `grep_files` — search content across files
+```
+grep_files "fn handle_tool" src/
+grep_files "struct App"
+```
+Use this instead of `grep -rn`. Safe, no shell expansion.
+
+### `glob_files` — list files by pattern
+```
+glob_files *.rs
+glob_files **/*.toml
+```
+Use this instead of `find`. Excludes `target/` and `.git/` automatically.
+
+### `write_file` — create or overwrite a file
+```
+write_file src/new_module.rs
+fn hello() {
+    println!("hello");
+}
+```
+The path is the first line; everything after is the file content.
+**Ask the user before writing** — this is a destructive operation.
+
+### `edit_file` — replace a string in a file
+```
+edit_file src/app.rs
+<<<FIND
+    let old_value = 42;
+<<<REPLACE
+    let new_value = 43;
+```
+Replaces the first exact match of the FIND block with the REPLACE block.
+**Read the file first** to get the exact text. **Ask the user before editing.**
+
+---
+
 ## Shell tool workflow
 
 The goal is always: get the specific information you need with minimum context cost. Pick the tool that answers the question directly — don't gather more than you need.

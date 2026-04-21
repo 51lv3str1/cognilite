@@ -914,6 +914,10 @@ impl App {
                 }
             }).collect();
 
+            let user_identity = self.display_username();
+            let model_identity = self.selected_model.as_deref()
+                .filter(|m| !m.is_empty())
+                .map(|m| format!("{}#{}", model_display_name(m), self.session_id));
             self.messages.push(Message {
                 role: Role::User,
                 content: raw.clone(),
@@ -923,10 +927,10 @@ impl App {
                 thinking: String::new(),
                 thinking_secs: None,
                 stats: None,
-                tool_call: None,
+                tool_call: Some(user_identity),
                 tool_collapsed: false,
             });
-            // empty assistant placeholder
+            // empty assistant placeholder — identity locked at send time
             self.messages.push(Message {
                 role: Role::Assistant,
                 content: String::new(),
@@ -936,7 +940,7 @@ impl App {
                 thinking: String::new(),
                 thinking_secs: None,
                 stats: None,
-                tool_call: None,
+                tool_call: model_identity,
                 tool_collapsed: false,
             });
             self.auto_scroll = true;
@@ -1423,7 +1427,7 @@ impl App {
                 self.screen = Screen::ModelSelect;
             }
 
-            F::Connected { model, room_id, .. } => {
+            F::Connected { model, room_id, session_id, username, .. } => {
                 // if models weren't sent (old server or --model in query), populate fallback
                 if self.models.is_empty() {
                     self.models = vec![crate::ollama::ModelEntry {
@@ -1436,6 +1440,13 @@ impl App {
                 }
                 self.selected_model = Some(model);
                 if !room_id.is_empty() { self.room_id = Some(room_id); }
+                // adopt server-assigned identity so all labels are consistent with the room
+                if !session_id.is_empty() { self.session_id = session_id; }
+                if !username.is_empty() {
+                    // server sends display_username() = "name#id"; extract just the name part
+                    let bare = username.rsplit_once('#').map(|(n, _)| n).unwrap_or(&username);
+                    self.username = bare.to_string();
+                }
                 if self.stream_state == StreamState::Streaming {
                     self.stream_state = StreamState::Idle;
                 }
@@ -1499,13 +1510,16 @@ impl App {
                     tool_call: Some(label_display),
                     tool_collapsed: true,
                 });
-                // new assistant placeholder for the follow-up response
+                // new assistant placeholder for the follow-up response — same identity
+                let ws_identity = self.selected_model.as_deref()
+                    .filter(|m| !m.is_empty())
+                    .map(|m| format!("{}#{}", model_display_name(m), self.session_id));
                 self.messages.push(Message {
                     role: Role::Assistant,
                     content: String::new(), llm_content: String::new(),
                     images: vec![], attachments: vec![],
                     thinking: String::new(), thinking_secs: None, stats: None,
-                    tool_call: None,
+                    tool_call: ws_identity,
                     tool_collapsed: false,
                 });
                 self.thinking_end_secs = None;
@@ -1533,12 +1547,15 @@ impl App {
                     tool_call: Some(label),
                     tool_collapsed: false,
                 });
+                let ws_identity = self.selected_model.as_deref()
+                    .filter(|m| !m.is_empty())
+                    .map(|m| format!("{}#{}", model_display_name(m), self.session_id));
                 self.messages.push(Message {
                     role: Role::Assistant,
                     content: String::new(), llm_content: String::new(),
                     images: vec![], attachments: vec![],
                     thinking: String::new(), thinking_secs: None, stats: None,
-                    tool_call: None,
+                    tool_call: ws_identity,
                     tool_collapsed: false,
                 });
                 self.thinking_end_secs = None;

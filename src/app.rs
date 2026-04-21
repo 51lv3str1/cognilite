@@ -300,7 +300,8 @@ pub struct Message {
     pub thinking: String,
     pub thinking_secs: Option<f64>, // set on intermediate messages interrupted by a tool call
     pub stats: Option<TokenStats>,
-    pub tool_call: Option<String>, // "Neuron › trigger" label, set for Role::Tool messages
+    pub tool_call: Option<String>,     // "Neuron › trigger" label, set for Role::Tool messages
+    pub tool_collapsed: bool,          // tool result body hidden by default
 }
 
 #[derive(Debug, PartialEq)]
@@ -917,6 +918,7 @@ impl App {
                 thinking_secs: None,
                 stats: None,
                 tool_call: None,
+                tool_collapsed: false,
             });
             // empty assistant placeholder
             self.messages.push(Message {
@@ -929,6 +931,7 @@ impl App {
                 thinking_secs: None,
                 stats: None,
                 tool_call: None,
+                tool_collapsed: false,
             });
             self.auto_scroll = true;
             self.stream_state = StreamState::Streaming;
@@ -974,6 +977,7 @@ impl App {
             thinking_secs: None,
             stats: None,
             tool_call: Some(self.display_username()),
+            tool_collapsed: false,
         });
         self.room_sync_user_msg();
         self.auto_scroll = true;
@@ -1006,6 +1010,7 @@ impl App {
             thinking_secs: None,
             stats: None,
             tool_call: None,
+            tool_collapsed: false,
         });
 
         let model = self.selected_model.clone().unwrap();
@@ -1291,6 +1296,7 @@ impl App {
                                         thinking_secs: None,
                                         stats: None,
                                         tool_call: Some(label),
+                                        tool_collapsed: true,
                                     });
                                     self.stream_state = StreamState::Idle;
                                     self.stream_started_at = None;
@@ -1480,6 +1486,7 @@ impl App {
                     }],
                     thinking: String::new(), thinking_secs: None, stats: None,
                     tool_call: Some(label_display),
+                    tool_collapsed: true,
                 });
                 // new assistant placeholder for the follow-up response
                 self.messages.push(Message {
@@ -1488,6 +1495,7 @@ impl App {
                     images: vec![], attachments: vec![],
                     thinking: String::new(), thinking_secs: None, stats: None,
                     tool_call: None,
+                    tool_collapsed: false,
                 });
                 self.thinking_end_secs = None;
                 self.stream_started_at = Some(std::time::Instant::now());
@@ -1512,6 +1520,7 @@ impl App {
                     }],
                     thinking: String::new(), thinking_secs: None, stats: None,
                     tool_call: Some(label),
+                    tool_collapsed: false,
                 });
                 self.messages.push(Message {
                     role: Role::Assistant,
@@ -1519,6 +1528,7 @@ impl App {
                     images: vec![], attachments: vec![],
                     thinking: String::new(), thinking_secs: None, stats: None,
                     tool_call: None,
+                    tool_collapsed: false,
                 });
                 self.thinking_end_secs = None;
                 self.stream_started_at = Some(std::time::Instant::now());
@@ -1736,6 +1746,7 @@ impl App {
                     images: vec![], attachments: vec![],
                     thinking: String::new(), thinking_secs: None, stats: None,
                     tool_call: Some("⊕ patch".to_string()),
+                    tool_collapsed: false,
                 });
             } else {
                 let ask_question = self.ask.as_ref().map(|a| a.question.clone()).unwrap_or_default();
@@ -1748,6 +1759,7 @@ impl App {
                     images: vec![], attachments: vec![],
                     thinking: String::new(), thinking_secs: None, stats: None,
                     tool_call: Some(label),
+                    tool_collapsed: false,
                 });
             }
 
@@ -1783,6 +1795,7 @@ impl App {
                 thinking_secs: None,
                 stats: None,
                 tool_call: Some("⊕ patch".to_string()),
+                tool_collapsed: false,
             });
             self.start_stream();
             return;
@@ -1804,6 +1817,7 @@ impl App {
             thinking_secs: None,
             stats: None,
             tool_call: Some(label),
+            tool_collapsed: false,
         });
         self.input.clear();
         self.cursor_pos = 0;
@@ -2579,7 +2593,7 @@ impl App {
         let size = result.len();
         let llm_content = format!("Tool result:\n{result}");
 
-        const MAX_DISPLAY_LINES: usize = 200;
+        const MAX_DISPLAY_LINES: usize = 15;
         let display_content = {
             let count = result.lines().count();
             if count > MAX_DISPLAY_LINES {
@@ -2605,6 +2619,7 @@ impl App {
             thinking_secs: None,
             stats: None,
             tool_call: Some(tool_label),
+            tool_collapsed: true,
         });
         self.auto_scroll = true;
         self.start_stream();

@@ -578,7 +578,16 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
             KeyCode::Down => app.history_nav_next(),
             KeyCode::PageUp   => { app.auto_scroll = false; app.scroll = app.scroll.saturating_sub(10); }
             KeyCode::PageDown => { app.scroll = app.scroll.saturating_add(10); }
-            KeyCode::Enter => app.cycle_message_attachment(),
+            KeyCode::Enter => {
+                let idx = app.history_cursor;
+                if let Some(msg) = app.messages.get_mut(idx) {
+                    if msg.role == crate::app::Role::Tool && !msg.attachments.is_empty() {
+                        msg.tool_collapsed = !msg.tool_collapsed;
+                    } else {
+                        app.cycle_message_attachment();
+                    }
+                }
+            }
             KeyCode::Char('q') => app.close_file_panel(),
             KeyCode::Char('y') if ctrl => app.copy_block(app.history_cursor),
             _ => {}

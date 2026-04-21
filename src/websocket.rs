@@ -416,6 +416,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
             thinking_secs: None,
             stats: None,
             tool_call: Some("Sala".to_string()),
+            tool_collapsed: false,
         };
         r.messages.push(join_msg);
         r.version += 1;
@@ -668,6 +669,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
             thinking_secs: None,
             stats: None,
             tool_call: Some("Sala".to_string()),
+            tool_collapsed: false,
         };
         r.messages.push(leave_msg);
         r.version += 1;
@@ -816,6 +818,7 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                                 thinking_secs: None,
                                 stats: None,
                                 tool_call: Some(format!("Neuron \u{203a} {name}")),
+                                tool_collapsed: false,
                             });
                             app.start_stream();
                             continue 'outer;

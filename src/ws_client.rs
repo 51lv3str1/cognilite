@@ -319,6 +319,7 @@ fn parse_frame(val: serde_json::Value) -> WsClientFrame {
                         images: vec![], attachments: vec![],
                         thinking: String::new(), thinking_secs: None, stats: None,
                         tool_call: if user.is_empty() { None } else { Some(user.to_string()) },
+                        tool_collapsed: false,
                     }
                 }).collect()
             }).unwrap_or_default(),

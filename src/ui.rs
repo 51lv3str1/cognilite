@@ -983,18 +983,21 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                         format!("{} B", att.size)
                     };
                     let label = msg.tool_call.as_deref().unwrap_or("tool");
+                    let toggle = if msg.tool_collapsed { "▶" } else { "▼" };
                     let copy_hint = if is_selected { "  ⎘" } else { "" };
                     lines.push(Line::from(vec![
-                        Span::styled(format!("  ⚙ {label}  "), Style::default().fg(DIM)),
+                        Span::styled(format!("  {toggle} ⚙ {label}  "), Style::default().fg(DIM)),
                         Span::styled(att.filename.clone(), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
                         Span::styled(format!("  {size_str}{copy_hint}"), Style::default().fg(DIM)),
                     ]));
-                    for code_line in msg.content.lines() {
-                        let truncated: String = code_line.chars().take(inner_width.saturating_sub(4)).collect();
-                        lines.push(Line::from(vec![
-                            Span::styled("  ▎ ", Style::default().fg(CODE_BORDER)),
-                            Span::styled(truncated, Style::default().fg(CODE_FG)),
-                        ]));
+                    if !msg.tool_collapsed {
+                        for code_line in msg.content.lines() {
+                            let truncated: String = code_line.chars().take(inner_width.saturating_sub(4)).collect();
+                            lines.push(Line::from(vec![
+                                Span::styled("  ▎ ", Style::default().fg(CODE_BORDER)),
+                                Span::styled(truncated, Style::default().fg(CODE_FG)),
+                            ]));
+                        }
                     }
                 }
             }

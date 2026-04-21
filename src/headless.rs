@@ -130,6 +130,7 @@ pub fn run(base_url: &str, args: HeadlessArgs) -> i32 {
         thinking_secs: None,
         stats: None,
         tool_call: None,
+        tool_collapsed: false,
     });
     app.start_stream();
 
@@ -266,6 +267,7 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool, show_thin
                                 thinking_secs: None,
                                 stats: None,
                                 tool_call: Some(label),
+                                tool_collapsed: false,
                             });
                             app.start_stream();
                             continue 'outer;

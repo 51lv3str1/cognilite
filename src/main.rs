@@ -26,8 +26,15 @@ fn main() -> Result<()> {
     // --read --remote <url>: dump room history and exit, no message sent
     if argv.iter().any(|a| a == "--read") {
         if let Some(pos) = argv.iter().position(|a| a == "--remote") {
-            if let Some(url) = argv.get(pos + 1) {
-                let code = ws_client::run_read_history(url);
+            if let Some(base_url) = argv.get(pos + 1) {
+                // append username so the server doesn't fall back to the active model name
+                let username = argv.iter().position(|a| a == "--username")
+                    .and_then(|i| argv.get(i + 1))
+                    .map(|u| url_encode(u))
+                    .unwrap_or_else(|| url_encode("observer"));
+                let sep = if base_url.contains('?') { '&' } else { '?' };
+                let url = format!("{base_url}{sep}username={username}&read_only=true");
+                let code = ws_client::run_read_history(&url);
                 std::process::exit(code);
             }
         }

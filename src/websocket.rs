@@ -250,6 +250,7 @@ pub struct SessionConfig {
     pub yes:          bool,
     pub thinking_srv: bool, // also show thinking on server stderr
     pub tui_client:   bool, // client is the cognilite TUI (--remote mode)
+    pub read_only:    bool, // observer — skip join/leave presence messages
     pub username:     String,
 }
 
@@ -265,6 +266,7 @@ impl SessionConfig {
             yes:         get("yes").map(|s| s == "true" || s == "1").unwrap_or(false),
             thinking_srv,
             tui_client:  get("client").map(|s| s == "tui").unwrap_or(false),
+            read_only:   get("read_only").map(|s| s == "true" || s == "1").unwrap_or(false),
             explicit_username: get("username").is_some(),
             username:    get("username").map(str::to_string)
                              .unwrap_or_else(crate::app::default_username),
@@ -406,20 +408,22 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
         };
         app.session_id = assigned_id;
         app.messages = r.messages.clone();
-        let join_msg = crate::app::Message {
-            role: crate::app::Role::Tool,
-            content: format!("**{}** joined the room.", app.display_username()),
-            llm_content: format!("{} joined the room.", app.display_username()),
-            images: vec![],
-            attachments: vec![],
-            thinking: String::new(),
-            thinking_secs: None,
-            stats: None,
-            tool_call: Some("Sala".to_string()),
-            tool_collapsed: false,
-        };
-        r.messages.push(join_msg);
-        r.version += 1;
+        if !cfg.read_only {
+            let join_msg = crate::app::Message {
+                role: crate::app::Role::Tool,
+                content: format!("**{}** joined the room.", app.display_username()),
+                llm_content: format!("{} joined the room.", app.display_username()),
+                images: vec![],
+                attachments: vec![],
+                thinking: String::new(),
+                thinking_secs: None,
+                stats: None,
+                tool_call: Some("Sala".to_string()),
+                tool_collapsed: false,
+            };
+            r.messages.push(join_msg);
+            r.version += 1;
+        }
         (r.version, r.live_token_version, r.live_tokens.len())
     };
 
@@ -659,20 +663,22 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
     {
         let mut r = room.lock().unwrap();
         r.active_session_ids.remove(&app.session_id);
-        let leave_msg = crate::app::Message {
-            role: crate::app::Role::Tool,
-            content: format!("**{}** left the room.", app.display_username()),
-            llm_content: format!("{} left the room.", app.display_username()),
-            images: vec![],
-            attachments: vec![],
-            thinking: String::new(),
-            thinking_secs: None,
-            stats: None,
-            tool_call: Some("Sala".to_string()),
-            tool_collapsed: false,
-        };
-        r.messages.push(leave_msg);
-        r.version += 1;
+        if !cfg.read_only {
+            let leave_msg = crate::app::Message {
+                role: crate::app::Role::Tool,
+                content: format!("**{}** left the room.", app.display_username()),
+                llm_content: format!("{} left the room.", app.display_username()),
+                images: vec![],
+                attachments: vec![],
+                thinking: String::new(),
+                thinking_secs: None,
+                stats: None,
+                tool_call: Some("Sala".to_string()),
+                tool_collapsed: false,
+            };
+            r.messages.push(leave_msg);
+            r.version += 1;
+        }
     }
 }
 

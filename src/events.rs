@@ -233,28 +233,29 @@ fn handle_config(app: &mut App, key: KeyEvent) {
         match key.code {
             KeyCode::Up   => nav_prev(&mut app.features_cursor, &filtered),
             KeyCode::Down => nav_next(&mut app.features_cursor, &filtered),
-            KeyCode::Left | KeyCode::Char('-') if app.features_cursor < 3 => {
+            KeyCode::Left | KeyCode::Char('-') if app.features_cursor < crate::app::GEN_PARAMS.len() => {
                 app.param_cursor = app.features_cursor;
                 app.param_adjust(-1.0);
             }
-            KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=') if app.features_cursor < 3 => {
+            KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=') if app.features_cursor < crate::app::GEN_PARAMS.len() => {
                 app.param_cursor = app.features_cursor;
                 app.param_adjust(1.0);
             }
-            KeyCode::Char('r') if app.features_cursor < 3 => {
+            KeyCode::Char('r') if app.features_cursor < crate::app::GEN_PARAMS.len() => {
                 app.param_cursor = app.features_cursor;
                 app.param_reset();
             }
-            KeyCode::Enter | KeyCode::Char(' ') if app.features_cursor >= 3 => {
-                if app.features_cursor < 6 {
-                    app.toggle_perf(app.features_cursor - 3);
+            KeyCode::Enter | KeyCode::Char(' ') if app.features_cursor >= crate::app::GEN_PARAMS.len() => {
+                let perf_end = crate::app::GEN_PARAMS.len() + 3;
+                if app.features_cursor < perf_end {
+                    app.toggle_perf(app.features_cursor - crate::app::GEN_PARAMS.len());
                 } else {
                     app.toggle_feature(0); // Thinking is feature index 0
                 }
             }
             KeyCode::Backspace => {
                 if !app.config_search.is_empty() { app.config_search.pop(); }
-                else if app.features_cursor < 3 {
+                else if app.features_cursor < crate::app::GEN_PARAMS.len() {
                     app.param_cursor = app.features_cursor;
                     app.param_reset();
                 }

@@ -379,13 +379,13 @@ fn draw_config(frame: &mut Frame, app: &App) {
             let mut y = items_y;
 
             // Generation sub-section
-            let gen_any = (0..3).any(|i| crate::app::fuzzy_match(&app.config_search, crate::app::GEN_PARAMS[i].0));
+            let gen_any = (0..crate::app::GEN_PARAMS.len()).any(|i| crate::app::fuzzy_match(&app.config_search, crate::app::GEN_PARAMS[i].0));
             if gen_any {
                 frame.render_widget(Paragraph::new(Line::from(
                     Span::styled("  Generation", Style::default().fg(DIM).add_modifier(Modifier::BOLD))
                 )), Rect { x: inner.x, y, width: inner.width, height: 1 });
                 y += 1;
-                for orig_idx in 0..3usize {
+                for orig_idx in 0..crate::app::GEN_PARAMS.len() {
                     let (name, desc, default, _, _, _) = crate::app::GEN_PARAMS[orig_idx];
                     if !crate::app::fuzzy_match(&app.config_search, name) { continue; }
                     let cursor = orig_idx == app.features_cursor;
@@ -395,10 +395,15 @@ fn draw_config(frame: &mut Frame, app: &App) {
                     let name_style = bg.patch(if cursor { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) });
                     let val_style  = bg.patch(if is_default { Style::default().fg(DIM) } else { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) });
                     let dim_style  = bg.patch(Style::default().fg(THINKING_COLOR));
+                    let val_str = if orig_idx == 3 {
+                        if value == 0.0 { "unlimited".to_string() } else { format!("{}", value as u64) }
+                    } else {
+                        format!("{value:.2}")
+                    };
                     frame.render_widget(Paragraph::new(Line::from(vec![
                         Span::styled(format!("  {name:<16}"), name_style),
                         Span::styled("← ", dim_style),
-                        Span::styled(format!("{value:.2}"), val_style),
+                        Span::styled(val_str, val_style),
                         Span::styled(" →", dim_style),
                         Span::styled(format!("  {desc}"), dim_style),
                     ])), Rect { x: inner.x, y, width: inner.width, height: 1 });
@@ -442,7 +447,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
         }
     } else if app.config_section == 1 {
         vec![hint("Enter", "confirm")]
-    } else if app.config_section == 3 && app.features_cursor < 3 {
+    } else if app.config_section == 3 && app.features_cursor < crate::app::GEN_PARAMS.len() {
         vec![hint("←/→", "adjust"), Span::raw("  "), hint("r", "reset")]
     } else {
         vec![hint("Enter", "toggle")]

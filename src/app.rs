@@ -14,9 +14,10 @@ static THEME_SET: OnceLock<ThemeSet>   = OnceLock::new();
 
 /// Generation parameter definitions: (name, description, default, min, max, step)
 pub const GEN_PARAMS: &[(&str, &str, f64, f64, f64, f64)] = &[
-    ("temperature",    "randomness of output",    0.8, 0.0, 2.0, 0.05),
-    ("top_p",          "nucleus sampling cutoff", 0.9, 0.0, 1.0, 0.05),
-    ("repeat_penalty", "repetition penalty",      1.1, 0.5, 2.0, 0.05),
+    ("temperature",     "randomness of output",              0.8,    0.0, 2.0,     0.05),
+    ("top_p",           "nucleus sampling cutoff",           0.9,    0.0, 1.0,     0.05),
+    ("repeat_penalty",  "repetition penalty",                1.1,    0.5, 2.0,     0.05),
+    ("thinking_budget", "max thinking tokens (0=unlimited)", 0.0,    0.0, 32768.0, 512.0),
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,7 +75,7 @@ pub struct NeuronPreset {
 pub struct Config {
     pub ctx_strategy: CtxStrategy,
     pub disabled_neurons: std::collections::HashSet<String>,
-    pub gen_params: [f64; 3],
+    pub gen_params: [f64; 4],
     pub ctx_pow2: bool,
     pub keep_alive: bool,
     pub warmup: bool,
@@ -150,7 +151,7 @@ pub fn is_mentioned(display_username: &str, content: &str) -> bool {
 pub fn load_config() -> Config {
     let default = Config {
         ctx_strategy: CtxStrategy::Dynamic, disabled_neurons: Default::default(),
-        gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2],
+        gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2, GEN_PARAMS[3].2],
         ctx_pow2: true, keep_alive: false, warmup: true, thinking: true,
         neuron_mode: NeuronMode::Manual, neuron_presets: Vec::new(), active_preset: None,
         username: default_username(),
@@ -168,6 +169,7 @@ pub fn load_config() -> Config {
         val.get("temperature").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[0].2),
         val.get("top_p").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[1].2),
         val.get("repeat_penalty").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[2].2),
+        val.get("thinking_budget").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[3].2),
     ];
     let ctx_pow2   = val.get("ctx_pow2").and_then(|v| v.as_bool()).unwrap_or(true);
     let keep_alive = val.get("keep_alive").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -394,7 +396,7 @@ pub struct App {
     pub history_pos: Option<usize>,
     pub input_draft: String,
     // generation params
-    pub gen_params: [f64; 3],
+    pub gen_params: [f64; 4],
     pub param_cursor: usize,
     // misc
     pub should_quit: bool,
@@ -592,9 +594,10 @@ impl App {
         let json = serde_json::json!({
             "ctx_strategy":    self.ctx_strategy.as_str(),
             "disabled_neurons": disabled,
-            "temperature":     self.gen_params[0],
-            "top_p":           self.gen_params[1],
-            "repeat_penalty":  self.gen_params[2],
+            "temperature":      self.gen_params[0],
+            "top_p":            self.gen_params[1],
+            "repeat_penalty":   self.gen_params[2],
+            "thinking_budget":  self.gen_params[3],
             "ctx_pow2":        self.ctx_pow2,
             "keep_alive":      self.keep_alive,
             "warmup":          self.warmup,
@@ -1080,7 +1083,9 @@ impl App {
                                 last.content.push_str(&msg.content);
                                 last.llm_content.push_str(&msg.content);
                                 if let Some(t) = msg.thinking {
-                                    last.thinking.push_str(&t);
+                                    let budget = self.gen_params[3] as usize;
+                                    let over = budget > 0 && last.thinking.len() / 4 >= budget;
+                                    if !over { last.thinking.push_str(&t); }
                                 }
                             }
                         }

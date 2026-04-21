@@ -107,7 +107,7 @@ pub fn stream_chat(
     model: String,
     messages: Vec<ChatMessage>,
     num_ctx: Option<u64>,
-    gen_params: [f64; 3],
+    gen_params: [f64; 4],
     keep_alive: bool,
     thinking: bool,
     tx: Sender<StreamChunk>,

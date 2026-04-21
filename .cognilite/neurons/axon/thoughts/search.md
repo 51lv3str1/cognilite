@@ -26,6 +26,21 @@ Use `a/`/`b/` prefixes · 3 context lines · read the file first · one patch pe
 
 **When explaining `<patch>` syntax in prose or examples, always wrap it in a code fence — a bare `<patch>` tag outside a fence is applied immediately.**
 
+**Before sending a patch, ask permission with this exact three-option format:**
+
+Describe what the patch does, then:
+```
+<ask type="choice">Yes|Yes, allow all edits this session|No</ask>
+```
+
+- **Yes** — apply this patch, ask again before the next one
+- **Yes, allow all edits this session** — apply this and all future patches in this conversation without asking
+- **No** — skip, explain what was not changed
+
+**If the user already selected "Yes, allow all edits this session" in any earlier turn**, skip the ask and apply directly — don't ask again for the rest of the conversation.
+
+Skip the ask only when: auto-accept mode is active (shown as `auto✓` in the header) · the user explicitly said "just do it" or similar · the change is a revert of something you just applied.
+
 **Surgical edits:** touch only what the task requires. Don't refactor adjacent code. Match existing style.
 
 For errors: extract `file:line` from the trace, read that region, then diagnose. Don't guess from the error text alone.

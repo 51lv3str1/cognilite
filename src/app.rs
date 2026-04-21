@@ -2537,9 +2537,20 @@ impl App {
         let size = result.len();
         let llm_content = format!("Tool result:\n{result}");
 
+        const MAX_DISPLAY_LINES: usize = 200;
+        let display_content = {
+            let count = result.lines().count();
+            if count > MAX_DISPLAY_LINES {
+                let head: String = result.lines().take(MAX_DISPLAY_LINES).collect::<Vec<_>>().join("\n");
+                format!("{head}\n[... {} more lines — full output sent to model]", count - MAX_DISPLAY_LINES)
+            } else {
+                result
+            }
+        };
+
         self.messages.push(Message {
             role: Role::Tool,
-            content: result,
+            content: display_content,
             llm_content,
             images: vec![],
             attachments: vec![Attachment {

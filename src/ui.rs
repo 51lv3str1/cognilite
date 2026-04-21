@@ -1138,7 +1138,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    let total_lines = lines.len() as u16;
+    let total_lines = lines.len().min(u16::MAX as usize) as u16;
     app.content_lines = total_lines;
 
     let visible_height = msg_area.height.saturating_sub(2);

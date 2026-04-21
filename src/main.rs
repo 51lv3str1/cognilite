@@ -85,6 +85,8 @@ fn main() -> Result<()> {
                 active_session_ids: std::collections::HashSet::new(),
             }));
             rooms.lock().unwrap().insert(room_id.clone(), room.clone());
+            // register local session_id so WS clients can't collide with it
+            room.lock().unwrap().active_session_ids.insert(app.session_id.clone());
             app.shared_room = Some(room);
         }
         {

@@ -1000,6 +1000,11 @@ impl App {
     /// Pushes an empty assistant placeholder and starts the Ollama stream
     /// from the current message history.
     pub fn start_stream(&mut self) {
+        // lock identity at stream start so it stays stable across tool-call restarts
+        let identity = match self.selected_model.as_deref() {
+            Some(m) if !m.is_empty() => format!("{}#{}", model_display_name(m), self.session_id),
+            _ => self.display_username(),
+        };
         self.messages.push(Message {
             role: Role::Assistant,
             content: String::new(),
@@ -1009,7 +1014,7 @@ impl App {
             thinking: String::new(),
             thinking_secs: None,
             stats: None,
-            tool_call: None,
+            tool_call: Some(identity),
             tool_collapsed: false,
         });
 

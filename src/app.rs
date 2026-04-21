@@ -88,18 +88,18 @@ pub struct Config {
 
 /// Short unique ID (4 hex chars) to disambiguate participants with the same name.
 pub fn new_session_id() -> String {
-    let mut buf = [0u8; 2];
+    let mut buf = [0u8; 3];
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
         use std::io::Read;
         let _ = f.read_exact(&mut buf);
     } else {
-        // fallback: time + pid
         let t = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u16;
-        let p = std::process::id() as u16;
-        buf = (t ^ p).to_le_bytes();
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u32;
+        let p = std::process::id();
+        let v = t ^ p;
+        buf = [v as u8, (v >> 8) as u8, (v >> 16) as u8];
     }
-    format!("{:02x}{:02x}", buf[0], buf[1])
+    format!("{:02x}{:02x}{:02x}", buf[0], buf[1], buf[2])
 }
 
 pub fn default_username() -> String {

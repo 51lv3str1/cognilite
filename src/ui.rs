@@ -839,9 +839,10 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
 
     if app.plan_mode {
         header_spans.push(Span::styled("  plan", Style::default().fg(Color::Rgb(249, 226, 175)).add_modifier(Modifier::BOLD)));
-    }
-    if app.auto_accept {
+    } else if app.auto_accept {
         header_spans.push(Span::styled("  auto✓", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD)));
+    } else {
+        header_spans.push(Span::styled("  normal", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)));
     }
     if let Some(t) = app.copy_notice {
         if t.elapsed().as_secs_f64() < 2.0 {

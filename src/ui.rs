@@ -996,13 +996,14 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 } else {
                     Span::raw("")
                 };
-                // use the tagged identity (username#id) if present, else fall back to selected model
+                // use the tagged identity (username#id) if present, else build it from selected model + session_id
                 let model_label = if let Some(ref tag) = msg.tool_call {
                     tag.clone()
                 } else {
-                    crate::app::model_display_name(
+                    let base = crate::app::model_display_name(
                         app.selected_model.as_deref().unwrap_or("assistant")
-                    ).to_string()
+                    );
+                    format!("{}#{}", base, app.session_id)
                 };
                 let label = if is_selected { format!("► {model_label}") } else { model_label.clone() };
                 let model_color = crate::app::username_color(

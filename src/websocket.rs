@@ -398,7 +398,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
         let app_base = r.messages.len();
         let join_msg = crate::app::Message {
             role: crate::app::Role::Tool,
-            content: format!("**{}** se unió a la sala.", app.display_username()),
+            content: format!("**{}** joined the room.", app.display_username()),
             llm_content: format!("{} joined the room.", app.display_username()),
             images: vec![],
             attachments: vec![],
@@ -648,7 +648,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
         let mut r = room.lock().unwrap();
         let leave_msg = crate::app::Message {
             role: crate::app::Role::Tool,
-            content: format!("**{}** salió de la sala.", app.display_username()),
+            content: format!("**{}** left the room.", app.display_username()),
             llm_content: format!("{} left the room.", app.display_username()),
             images: vec![],
             attachments: vec![],

@@ -1461,7 +1461,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         let room_id_owned = app.room_id.clone();
         let lines = if let Some(ref room_id) = room_id_owned {
             let share_url = app.room_share_url()
-                .unwrap_or_else(|| format!("(conectá via --remote primero)/id/{room_id}"));
+                .unwrap_or_else(|| format!("(connect via --remote first)/id/{room_id}"));
             vec![
                 Line::from(vec![
                     Span::styled(" UUID:  ", Style::default().fg(DIM)),
@@ -1474,26 +1474,26 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 Line::from(""),
                 Line::from(vec![
                     Span::styled(" y", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD)),
-                    Span::styled(" copiar URL   ", Style::default().fg(DIM)),
+                    Span::styled(" copy URL   ", Style::default().fg(DIM)),
                     Span::styled(" Esc", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD)),
-                    Span::styled(" cerrar", Style::default().fg(DIM)),
+                    Span::styled(" close", Style::default().fg(DIM)),
                 ]),
             ]
         } else {
             vec![
                 Line::from(vec![
-                    Span::styled(" No estás en ninguna sala.", Style::default().fg(DIM)),
+                    Span::styled(" Not in a room.", Style::default().fg(DIM)),
                 ]),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled(" Conectate a un servidor con ", Style::default().fg(DIM)),
+                    Span::styled(" Connect to a server with ", Style::default().fg(DIM)),
                     Span::styled("Ctrl+R", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
-                    Span::styled(" en la pantalla de modelos.", Style::default().fg(DIM)),
+                    Span::styled(" on the model select screen.", Style::default().fg(DIM)),
                 ]),
                 Line::from(""),
                 Line::from(vec![
                     Span::styled(" Esc", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD)),
-                    Span::styled(" cerrar", Style::default().fg(DIM)),
+                    Span::styled(" close", Style::default().fg(DIM)),
                 ]),
             ]
         };

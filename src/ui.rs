@@ -1367,6 +1367,8 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             Span::raw("  "),
             hint("Tab", "browse history"),
             Span::raw("  "),
+            hint("Shift+Tab", "mode"),
+            Span::raw("  "),
             hint("F1", "help"),
         ])
     };

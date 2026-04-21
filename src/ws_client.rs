@@ -231,6 +231,35 @@ pub fn run_headless(url: &str, message: &str, thinking_stderr: bool) -> i32 {
     exit
 }
 
+/// Connect to a room, print the message history, and exit — no message sent.
+pub fn run_read_history(url: &str) -> i32 {
+    let (mut tx, rx) = match connect(url) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("cognilite: connection failed: {e}"); return 1; }
+    };
+
+    loop {
+        match rx.recv() {
+            Ok(WsClientFrame::RoomUpdate { messages }) => {
+                for msg in &messages {
+                    let label = msg.tool_call.as_deref().unwrap_or(match msg.role {
+                        crate::app::Role::User      => "user",
+                        crate::app::Role::Assistant => "assistant",
+                        crate::app::Role::Tool      => "tool",
+                    });
+                    println!("[{label}] {}", msg.content);
+                }
+            }
+            Ok(WsClientFrame::Connected { .. }) => break,
+            Ok(WsClientFrame::Error(e)) => { eprintln!("error: {e}"); return 1; }
+            Ok(WsClientFrame::Disconnected) | Err(_) => return 1,
+            _ => {}
+        }
+    }
+    write_frame(&mut tx, OP_CLOSE, &[]);
+    0
+}
+
 // ── Frame parsing ─────────────────────────────────────────────────────────
 
 fn parse_frame(val: serde_json::Value) -> WsClientFrame {
@@ -328,6 +357,29 @@ fn parse_frame(val: serde_json::Value) -> WsClientFrame {
         Some("room_token") => WsClientFrame::RoomToken {
             user:    s("user"),
             content: s("content"),
+        },
+
+        Some("history") => WsClientFrame::RoomUpdate {
+            messages: val["messages"].as_array().map(|arr| {
+                arr.iter().map(|m| {
+                    let role = match m["role"].as_str() {
+                        Some("user") => crate::app::Role::User,
+                        Some("tool") => crate::app::Role::Tool,
+                        _            => crate::app::Role::Assistant,
+                    };
+                    let content = m["content"].as_str().unwrap_or("").to_string();
+                    let user = m["user"].as_str().unwrap_or("");
+                    crate::app::Message {
+                        role,
+                        content: content.clone(),
+                        llm_content: content,
+                        images: vec![], attachments: vec![],
+                        thinking: String::new(), thinking_secs: None, stats: None,
+                        tool_call: if user.is_empty() { None } else { Some(user.to_string()) },
+                        tool_collapsed: false,
+                    }
+                }).collect()
+            }).unwrap_or_default(),
         },
 
         // frames the server sends that we don't need to act on in TUI

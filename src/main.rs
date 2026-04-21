@@ -23,6 +23,16 @@ fn main() -> Result<()> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let ollama_url = get_ollama_url(&argv);
 
+    // --read --remote <url>: dump room history and exit, no message sent
+    if argv.iter().any(|a| a == "--read") {
+        if let Some(pos) = argv.iter().position(|a| a == "--remote") {
+            if let Some(url) = argv.get(pos + 1) {
+                let code = ws_client::run_read_history(url);
+                std::process::exit(code);
+            }
+        }
+    }
+
     // headless + remote: connect to a WS room and send one message (non-interactive)
     if argv.iter().any(|a| a == "--headless") {
         if let Some(ws_url) = parse_remote_arg_headless(&argv) {

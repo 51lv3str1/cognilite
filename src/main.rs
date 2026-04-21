@@ -33,7 +33,7 @@ fn main() -> Result<()> {
                     .map(|u| url_encode(u))
                     .unwrap_or_else(|| url_encode("observer"));
                 let sep = if base_url.contains('?') { '&' } else { '?' };
-                let url = format!("{base_url}{sep}username={username}&read_only=true");
+                let url = format!("{base_url}{sep}username={username}");
                 let code = ws_client::run_read_history(&url);
                 std::process::exit(code);
             }

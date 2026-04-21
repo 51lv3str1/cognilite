@@ -995,8 +995,11 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                 {
                     (et as f64 / (ed as f64 / 1_000_000_000.0), et, pt)
                 } else { (0.0, 0, 0) };
-                // store stats and tag the assistant message with our identity for the room
-                let identity = app.display_username();
+                // tag the assistant message with the model's identity, not the client's
+                let identity = match app.selected_model.as_deref() {
+                    Some(m) => format!("{}#{}", crate::app::model_display_name(m), app.session_id),
+                    None    => app.display_username(),
+                };
                 if let Some(last) = app.messages.last_mut() {
                     if last.role == crate::app::Role::Assistant {
                         last.thinking_secs = thinking_end_secs;

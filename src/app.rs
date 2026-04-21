@@ -640,7 +640,10 @@ impl App {
             if let Ok(mut r) = room.lock() {
                 r.live_tokens.push_str(token);
                 r.live_token_version += 1;
-                r.live_user = self.display_username();
+                r.live_user = match self.selected_model.as_deref() {
+                    Some(m) if !m.is_empty() => format!("{}#{}", model_display_name(m), self.session_id),
+                    _ => self.display_username(),
+                };
             }
         }
     }

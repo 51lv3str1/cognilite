@@ -406,6 +406,7 @@ pub fn safe_print_boundary(content: &str, from: usize) -> usize {
         "<ask", "</ask>",
         "<patch>", "</patch>",
         "<mood>", "</mood>",
+        "<preview", "</preview>",
     ];
     let mut pos = from;
     loop {

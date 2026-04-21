@@ -211,7 +211,13 @@ fn parse_remote_arg_headless(argv: &[String]) -> Option<String> {
         }
         i += 1;
     }
-    // do NOT inject config username — let server set username from model name
+    // inject config username if --username was not explicitly passed
+    if !params.iter().any(|p| p.starts_with("username=")) {
+        let username = app::load_config().username;
+        if !username.is_empty() {
+            params.push(format!("username={}", url_encode(&username)));
+        }
+    }
     let sep = if url.contains('?') { '&' } else { '?' };
     url.push(sep);
     url.push_str(&params.join("&"));

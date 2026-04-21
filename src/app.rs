@@ -402,6 +402,8 @@ pub struct App {
     pub help_scroll: u16,
     pub copy_notice: Option<std::time::Instant>,
     pub status_notice: Option<(std::time::Instant, String)>,
+    pub plan_mode:   bool, // model plans only — no tool/patch execution
+    pub auto_accept: bool, // auto-apply patches and confirm asks
     // chat focus / history navigation
     pub chat_focus: ChatFocus,
     pub history_cursor: usize, // index into messages[] for selected block
@@ -534,6 +536,8 @@ impl App {
             help_scroll: 0,
             copy_notice: None,
             status_notice: None,
+            plan_mode:   false,
+            auto_accept: false,
             chat_focus: ChatFocus::Input,
             history_cursor: 0,
             ask: None,
@@ -777,6 +781,18 @@ impl App {
         self.save_config();
     }
 
+    pub fn toggle_plan_mode(&mut self) {
+        self.plan_mode = !self.plan_mode;
+        self.status_notice = Some((std::time::Instant::now(),
+            if self.plan_mode { "plan mode on".into() } else { "plan mode off".into() }));
+    }
+
+    pub fn toggle_auto_accept(&mut self) {
+        self.auto_accept = !self.auto_accept;
+        self.status_notice = Some((std::time::Instant::now(),
+            if self.auto_accept { "auto-accept on".into() } else { "auto-accept off".into() }));
+    }
+
     pub fn toggle_config(&mut self) {
         self.show_help = false;
         self.screen = match self.screen {
@@ -926,6 +942,10 @@ impl App {
         if let Some(fp) = &self.file_panel {
             let ui_note = format!("[UI context: the file panel is showing \"{}\"]\n\n", fp.display_path);
             llm_content = format!("{ui_note}{llm_content}");
+        }
+
+        if self.plan_mode {
+            llm_content = format!("{llm_content}\n\n[PLAN MODE: Describe your plan step by step — which files, commands, and changes are involved. Do NOT emit <tool>, <patch>, or <ask> tags. Output the plan only.]");
         }
 
         self.messages.push(Message {
@@ -1125,8 +1145,10 @@ impl App {
                             self.stream_state = StreamState::Idle;
                             self.stream_started_at = None;
                             self.thinking_end_secs = None;
+                            let auto = self.auto_accept && matches!(&kind, AskKind::Confirm);
                             self.ask = Some(InputRequest { question, kind });
                             self.ask_cursor = 0;
+                            if auto { self.submit_ask("Yes".to_string()); }
                             return;
                         }
                         // detect <patch> tag — show diff, ask confirmation, stop stream
@@ -1162,6 +1184,7 @@ impl App {
                                 kind: AskKind::Confirm,
                             });
                             self.ask_cursor = 0;
+                            if self.auto_accept { self.submit_ask("Yes".to_string()); }
                             return;
                         }
                         // detect <mood>...</mood> — update state, strip from display, continue streaming

@@ -837,6 +837,12 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         }
     }
 
+    if app.plan_mode {
+        header_spans.push(Span::styled("  plan", Style::default().fg(Color::Rgb(249, 226, 175)).add_modifier(Modifier::BOLD)));
+    }
+    if app.auto_accept {
+        header_spans.push(Span::styled("  auto✓", Style::default().fg(USER_COLOR).add_modifier(Modifier::BOLD)));
+    }
     if let Some(t) = app.copy_notice {
         if t.elapsed().as_secs_f64() < 2.0 {
             header_spans.push(Span::styled("  ✓ copied", Style::default().fg(USER_COLOR)));
@@ -1422,6 +1428,10 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 ("Ctrl+O",              "Import chat from JSON"),
                 ("Ctrl+C",              "Quit"),
                 ("F1",                  "Toggle this help"),
+            ]),
+            ("Modes", &[
+                ("Ctrl+G",              "Plan mode — model describes plan only, no tool or patch execution"),
+                ("Ctrl+D",              "Auto-accept — patches and confirm asks are applied automatically"),
             ]),
             ("Rooms (multi-user)", &[
                 ("Ctrl+J",              "Show room UUID + shareable URL"),

@@ -55,6 +55,21 @@ cognilite --remote ws://<host>:8765/id/<uuid>
 - Your username is your model name without the version tag (e.g. `qwen3`, not `qwen3:latest`). No `--username` needed.
 - If you need a custom identity, pass `--username <name>` explicitly.
 
+## Conversation modes
+
+The user can toggle these modes at any time with keyboard shortcuts. When active, they appear as badges in the header.
+
+**Plan mode** (`Ctrl+G`): your message will contain `[PLAN MODE: ...]` at the end.
+- Describe what you would do step by step: which files, which commands, what changes.
+- Do NOT emit `<tool>`, `<patch>`, or `<ask>` tags — describe them instead.
+- Example: "I would run `grep -rn 'fn poll_stream' src/` to find the function, then read lines 1031–1100 with `sed`, then patch line 1140 to add the auto_accept check."
+- Use `<think>` freely — it helps you reason before committing to the plan.
+
+**Auto-accept mode** (`Ctrl+D`): patches and `<ask type="confirm">` are accepted automatically without user interaction.
+- Proceed directly — don't ask "should I apply this?" since it will be applied immediately.
+- Still use `<ask>` for text input or choices where the user's answer genuinely changes the outcome.
+- Mention in your response what you applied, so the user can review after the fact.
+
 ## Model capabilities and feature integration
 
 cognilite provides features as text tags — they work for **every model** regardless of architecture. Your base training doesn't need to support any of them natively.

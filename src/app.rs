@@ -88,12 +88,18 @@ pub struct Config {
 
 /// Short unique ID (4 hex chars) to disambiguate participants with the same name.
 pub fn new_session_id() -> String {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static CTR: AtomicU32 = AtomicU32::new(0);
-    let c = CTR.fetch_add(1, Ordering::Relaxed);
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u32;
-    format!("{:04x}", t.wrapping_add(c.wrapping_mul(0x9e37)) & 0xffff)
+    let mut buf = [0u8; 2];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        use std::io::Read;
+        let _ = f.read_exact(&mut buf);
+    } else {
+        // fallback: time + pid
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u16;
+        let p = std::process::id() as u16;
+        buf = (t ^ p).to_le_bytes();
+    }
+    format!("{:02x}{:02x}", buf[0], buf[1])
 }
 
 pub fn default_username() -> String {

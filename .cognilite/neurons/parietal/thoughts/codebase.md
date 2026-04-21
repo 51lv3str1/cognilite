@@ -20,6 +20,18 @@ glob_files *.rs
 ```
 or `*.py`, `*.go`, etc. You now have the full file list. **Do not read any file yet.**
 
+### Never read these unless the user explicitly asks
+
+**Compiled / generated output** — skip entirely:
+- `target/`, `build/`, `dist/`, `out/`, `.next/`, `__pycache__/`, `*.pyc`, `node_modules/`
+- Any binary or lock file: `*.lock` (Cargo.lock is fine), `*.wasm`, `*.so`, `*.dll`, `*.exe`
+
+**Sensitive files** — skip and acknowledge instead:
+- `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`
+- `secrets.*`, `credentials.*`, any file whose name contains `secret`, `token`, `password`, `api_key`
+
+If the user says "read everything" and one of these appears in the file list, say: "Skipping `<filename>` (compiled output / sensitive) — ask me to read it if you need it."
+
 ## Step 3 — Read the entry point (1 read)
 
 ```

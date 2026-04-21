@@ -851,9 +851,9 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     }
     {
         let budget = app.gen_params[3] as u64;
-        let label = if budget == 0 { "think:∞".to_string() } else { format!("think:{budget}") };
-        let color = if budget == 0 { Color::DarkGray } else { Color::Rgb(137, 180, 250) };
-        header_spans.push(Span::styled(format!("  {label}"), Style::default().fg(color).add_modifier(Modifier::BOLD)));
+        if budget > 0 {
+            header_spans.push(Span::styled(format!("  think:{budget}"), Style::default().fg(Color::Rgb(137, 180, 250)).add_modifier(Modifier::BOLD)));
+        }
     }
     if let Some(t) = app.copy_notice {
         if t.elapsed().as_secs_f64() < 2.0 {

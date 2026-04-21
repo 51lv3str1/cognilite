@@ -394,15 +394,21 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
     // room_base = room size after join message (app_base + 1)
     let (mut known_version, mut known_token_version, mut sent_token_len) = {
         let mut r = room.lock().unwrap();
-        // assign a server-side unique session ID for this participant
-        let assigned_id = loop {
-            let id = crate::app::new_session_id();
-            if !r.active_session_ids.contains(&id) {
-                r.active_session_ids.insert(id.clone());
-                break id;
+        // assign two distinct collision-free IDs: one for the model, one for the human user
+        let (model_id, user_id) = loop {
+            let mid = crate::app::new_session_id();
+            let uid = crate::app::new_session_id();
+            if mid != uid
+                && !r.active_session_ids.contains(&mid)
+                && !r.active_session_ids.contains(&uid)
+            {
+                r.active_session_ids.insert(mid.clone());
+                r.active_session_ids.insert(uid.clone());
+                break (mid, uid);
             }
         };
-        app.session_id = assigned_id;
+        app.session_id      = model_id;
+        app.user_session_id = user_id;
         app.messages = r.messages.clone();
         let join_msg = crate::app::Message {
             role: crate::app::Role::Tool,
@@ -441,8 +447,9 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
         "model": model_name,
         "ctx": ctx_str,
         "room_id": room_id,
-        "username": app.display_username(),
-        "session_id": app.session_id,
+        "username":        app.display_username(),
+        "session_id":      app.session_id,
+        "user_session_id": app.user_session_id,
     })) { return; }
 
     // use 100ms read timeout so we can poll room version between client frames
@@ -657,6 +664,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
     {
         let mut r = room.lock().unwrap();
         r.active_session_ids.remove(&app.session_id);
+        r.active_session_ids.remove(&app.user_session_id);
         let leave_msg = crate::app::Message {
             role: crate::app::Role::Tool,
             content: format!("**{}** left the room.", app.display_username()),

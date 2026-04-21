@@ -450,7 +450,8 @@ pub struct App {
     pub remote_ollama_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
     pub remote_label: Option<String>, // shown in title bar when connected remotely
     pub username: String,
-    pub session_id: String,  // unique per connection, used to disambiguate same-named participants
+    pub session_id: String,      // unique ID for the MODEL participant in this session
+    pub user_session_id: String, // unique ID for the HUMAN participant in this session
     pub room_id: Option<String>,      // UUID of the current WS room
     pub shared_room: Option<crate::websocket::SharedRoom>, // shared room state (local server)
     pub room_synced_len: usize,       // how many room messages we've already pulled into app.messages
@@ -573,6 +574,7 @@ impl App {
             remote_label: None,
             username: cfg.username,
             session_id: new_session_id(),
+            user_session_id: new_session_id(),
             room_id: Some(crate::websocket::new_uuid()),
             shared_room: None,
             room_synced_len: 0,
@@ -639,7 +641,7 @@ impl App {
 
     /// Full display identity: "username#session_id" — unique per connection.
     pub fn display_username(&self) -> String {
-        format!("{}#{}", self.username, self.session_id)
+        format!("{}#{}", self.username, self.user_session_id)
     }
 
     pub fn set_username(&mut self, name: String) {
@@ -1427,7 +1429,7 @@ impl App {
                 self.screen = Screen::ModelSelect;
             }
 
-            F::Connected { model, room_id, session_id, username, .. } => {
+            F::Connected { model, room_id, session_id, username, user_session_id, .. } => {
                 // if models weren't sent (old server or --model in query), populate fallback
                 if self.models.is_empty() {
                     self.models = vec![crate::ollama::ModelEntry {
@@ -1440,10 +1442,11 @@ impl App {
                 }
                 self.selected_model = Some(model);
                 if !room_id.is_empty() { self.room_id = Some(room_id); }
-                // adopt server-assigned identity so all labels are consistent with the room
-                if !session_id.is_empty() { self.session_id = session_id; }
+                // adopt server-assigned identities so labels are consistent with the room
+                if !session_id.is_empty()      { self.session_id      = session_id; }
+                if !user_session_id.is_empty() { self.user_session_id = user_session_id; }
                 if !username.is_empty() {
-                    // server sends display_username() = "name#id"; extract just the name part
+                    // server sends display_username() = "name#user_id"; extract the name part
                     let bare = username.rsplit_once('#').map(|(n, _)| n).unwrap_or(&username);
                     self.username = bare.to_string();
                 }

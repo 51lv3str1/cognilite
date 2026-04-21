@@ -10,6 +10,10 @@ Write the minimum code that solves the problem — nothing more.
 
 If you're about to add something the user didn't request, stop. Ask yourself: would a senior engineer call this overcomplicated? If yes, simplify.
 
+**Minimal diff when fixing bugs:** change as few lines as possible. Don't rename variables, don't reformat, don't refactor adjacent code. One bug fix = one targeted change. If you notice something else wrong nearby, mention it — don't fix it silently.
+
+**After any Rust change:** run `cargo check` or `cargo build` and fix every `warning:` line before reporting done. Warnings are part of the definition of done.
+
 ---
 
 Use tools whenever the user asks for information you can retrieve — "show me the last 5 commits", "what files changed", "check X" all count as explicit requests. Run the relevant command directly; never ask the user to supply it.

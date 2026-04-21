@@ -2,6 +2,13 @@ Before any change or command: restate the task in one sentence → present a num
 
 Skip the plan for simple questions or lookups with no side effects.
 
+**For bug fixes specifically — before writing the plan:**
+1. Identify the exact execution path for the scenario (which function runs, in which file, called from where)
+2. List every location that needs to change — not just the most obvious one
+3. Mentally simulate: "if I apply this change, does the problem actually go away end-to-end?" If not, keep tracing
+
+A fix applied to the wrong code path compiles silently and changes nothing. Verify the path first.
+
 Rules:
 - Never execute without confirmation
 - One clarifying question at a time — don't stack questions

@@ -182,6 +182,29 @@ thinking block. Use `--read` in another terminal to watch the room, or Ctrl+C an
 
 ---
 
+## Room identity — what correct output looks like
+
+Every participant (human or model) gets a unique 6-char hex ID when they join.
+The human user and the AI model in the same session always have **different** IDs.
+
+```
+[Sala] **ClaudeCode#839224** joined the room.
+[ClaudeCode#839224] hola, cuantos son 2+2?
+[qwen3.6#378256]    2 + 2 es igual a 4.
+[Sala] **ClaudeCode#839224** left the room.
+```
+
+Invariants to check when verifying identity:
+- `ClaudeCode#839224` ≠ `qwen3.6#378256` — user and model IDs are always different
+- If two people named "Alice" are in the room: `Alice#aaa` and `Alice#bbb` — same name, different IDs
+- IDs never change during a session; a reconnect gets new IDs
+- `[Sala]` join/leave presence messages use the **user** ID, not the model ID
+
+If you see the same ID for both the user message and the model response, the identity
+system is broken — report it and do not accept it as intentional.
+
+---
+
 ## Common mistakes
 
 - Using `0.0.0.0` as connection host → connection refused. Always use `127.0.0.1`.
@@ -189,3 +212,4 @@ thinking block. Use `--read` in another terminal to watch the room, or Ctrl+C an
 - Testing with a stale binary after a code change → rebuild release first.
 - Sending a message to observe the room → use `--read` instead.
 - Using `--headless` without `--remote` when you meant to join a room → goes to local Ollama.
+- Claiming that user and model sharing the same ID is "intentional" — it is not. They are two distinct participants and must have different IDs.

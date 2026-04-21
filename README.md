@@ -254,7 +254,7 @@ The server sends structured JSON frames back to the client:
 
 | Frame type | When | Fields |
 |------------|------|--------|
-| `connected` | Session ready (after warmup) | `model`, `ctx` |
+| `connected` | Session ready (after warmup) | `model`, `ctx`, `room_id`, `session_id` (model ID), `user_session_id` (human ID), `username` |
 | `token` | Each streamed token | `content` |
 | `thinking_start` | Thinking block begins | — |
 | `thinking` | Thinking block content | `content` |
@@ -333,9 +333,43 @@ cognilite --remote ws://your-ip:8765/id/<uuid>
 - **Append-only history** — messages are stored in a shared room state; new members receive the full history on connect
 - **Live tokens** — while the AI is streaming, every token is pushed to the room so other participants see it in real time (shown as a `▸ username  token...` typing indicator)
 - **Presence** — join and leave events are injected as system messages in the chat
-- **Session identity** — each connection has a 4-char hex `session_id`; participants are identified as `username#id` to avoid collisions between same-named users
-- **Mention system** — WS sessions auto-respond to AI turns; use `#username#id` to address a specific participant, or `#all` to have the AI respond to everyone
+- **Session identity** — every participant (human or model) is assigned a unique 6-char hex ID on join; they appear as `name#xxxxxx` in the chat. The human user and the AI model in the same session always get **different** IDs — they are two distinct participants
+- **Mention system** — WS sessions auto-respond to AI turns; use `@username#id` to address a specific participant, or `@all` to have the AI respond to everyone
 - **TUI behavior** — the local TUI only responds to direct user input; it does not auto-respond to room mentions
+
+### Identity in practice
+
+When a participant connects, the room shows:
+
+```
+[Sala] Alice#a3f1c2 joined the room.
+[Alice#a3f1c2] what is 2 + 2?
+[qwen3.6#9d04b7] 2 + 2 is 4.
+[Sala] Alice#a3f1c2 left the room.
+```
+
+Key invariants:
+- `Alice#a3f1c2` is the **human**; `qwen3.6#9d04b7` is the **model** — same session, different IDs
+- Two people named Alice in the same room: `Alice#a3f1c2` and `Alice#bb2e81` — same name, different IDs
+- `Alice#a3f1c2` can never appear twice simultaneously — the ID is unique per active connection
+- IDs are stable for the lifetime of the connection; a reconnect gets a new ID
+
+### Connecting to a room
+
+```bash
+# join the room as a remote TUI (interactive)
+cognilite --remote ws://host:8765/id/<uuid>
+
+# send one headless message and get a response (non-interactive)
+cognilite --headless --remote ws://host:8765/id/<uuid> \
+  --username alice \
+  --message "your message"
+
+# read room history without sending anything or triggering a response
+cognilite --read --remote ws://host:8765/id/<uuid>
+```
+
+The `--username` flag sets how you appear in the room. If omitted, the value from `~/.config/cognilite/config.json` is used. For headless connections without an explicit username, the server falls back to the model name as the displayed identity.
 
 ### Username
 

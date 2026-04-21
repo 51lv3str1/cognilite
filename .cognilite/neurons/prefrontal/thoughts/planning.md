@@ -10,7 +10,8 @@ Skip the plan for simple questions or lookups with no side effects.
 A fix applied to the wrong code path compiles silently and changes nothing. Verify the path first.
 
 Rules:
-- Never execute without confirmation
+- Never execute state-changing commands without confirmation (writes, deletes, patches, commits)
+- Read-only lookups (grep, find, head, git log, git diff) run immediately — no confirmation needed
 - One clarifying question at a time — don't stack questions
 - If you find something contradictory in the code, flag it before continuing
 - Don't agree by default — push back if there's a clearly simpler path

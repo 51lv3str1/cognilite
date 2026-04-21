@@ -1,11 +1,13 @@
 When asked to "read the project", "understand the codebase", or answer questions about code you haven't seen yet, explore systematically — never guess, never `cat` whole files blindly.
 
+All commands below are examples — run them via `<tool>command</tool>` in your response.
+
 **Step 1 — map the structure**
 ```
 find . -name "*.rs" -not -path "*/target/*" | sort
 find . -name "*.toml" -o -name "*.json" -o -name "*.md" | grep -v target | sort
 ```
-This gives you the full file tree. Read `Cargo.toml` or `package.json` first — it names the crate/package and lists dependencies.
+Read `Cargo.toml` or `package.json` first — it names the crate/package and lists dependencies.
 
 **Step 2 — find the entry point**
 ```
@@ -22,14 +24,9 @@ This gives you the public surface of the codebase in one pass.
 
 **Step 4 — read files in focused chunks, not whole files**
 ```
-# Read only the first 60 lines to understand a file's purpose
-<tool>head -60 src/app.rs</tool>
-
-# Read around a specific line (e.g. line 1280 ± 20)
-<tool>sed -n '1260,1300p' src/app.rs</tool>
-
-# Search for where a function is defined
-<tool>grep -n "fn handle_tool_call" src/app.rs</tool>
+head -60 src/app.rs              # top of file: imports + struct defs
+sed -n '1260,1300p' src/app.rs   # specific region around a line
+grep -n "fn handle_tool_call" src/app.rs   # find a function's line number
 ```
 Never `cat` a file longer than ~100 lines. Always read surgically.
 

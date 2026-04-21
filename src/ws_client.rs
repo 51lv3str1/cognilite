@@ -194,6 +194,7 @@ pub fn run_headless(url: &str, message: &str, thinking_stderr: bool) -> i32 {
     }
 
     send_json(&mut tx, serde_json::json!({ "type": "message", "content": message }));
+    let stream_start = std::time::Instant::now();
 
     // stream response
     let mut exit = 0i32;
@@ -210,7 +211,17 @@ pub fn run_headless(url: &str, message: &str, thinking_stderr: bool) -> i32 {
                 eprintln!("\n[ask: {question}] (non-interactive — aborting)");
                 exit = 1; break;
             }
-            Ok(WsClientFrame::Done { .. }) | Ok(WsClientFrame::Disconnected) | Err(_) => break,
+            Ok(WsClientFrame::Done { tps, tokens, prompt_eval }) => {
+                let wall = stream_start.elapsed().as_secs_f64();
+                let mins = (wall / 60.0) as u64;
+                let secs = wall as u64 % 60;
+                let wall_str = if mins > 0 { format!("{mins}m {secs:02}s") } else { format!("{secs}s") };
+                if tokens > 0 {
+                    eprintln!("{:.1} tok/s  ·  {} tokens  ·  {} prompt eval  ·  {}", tps, tokens, prompt_eval, wall_str);
+                }
+                break;
+            }
+            Ok(WsClientFrame::Disconnected) | Err(_) => break,
             Ok(WsClientFrame::Error(e)) => { eprintln!("\nerror: {e}"); exit = 1; break; }
             _ => {}
         }

@@ -843,11 +843,6 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    if let Some(ref rid) = app.room_id {
-        let short = &rid[..rid.len().min(8)];
-        header_spans.push(Span::styled(format!("  {short}"), Style::default().fg(DIM)));
-    }
-
     if let Some(t) = app.copy_notice {
         if t.elapsed().as_secs_f64() < 2.0 {
             header_spans.push(Span::styled("  ✓ copied", Style::default().fg(USER_COLOR)));

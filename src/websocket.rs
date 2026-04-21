@@ -394,9 +394,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
     // load room history and push join presence event
     // app_base = how many messages app.messages starts with (existing room history)
     // room_base = room size after join message (app_base + 1)
-    // All push logic uses: already_pushed = r.messages.len() - room_base
-    //                      push app.messages[app_base..].skip(already_pushed)
-    let (mut known_version, mut known_token_version, mut sent_token_len, app_base, room_base) = {
+    let (mut known_version, mut known_token_version, mut sent_token_len) = {
         let mut r = room.lock().unwrap();
         // assign a server-side unique session ID for this participant
         let assigned_id = loop {
@@ -408,7 +406,6 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
         };
         app.session_id = assigned_id;
         app.messages = r.messages.clone();
-        let app_base = r.messages.len();
         let join_msg = crate::app::Message {
             role: crate::app::Role::Tool,
             content: format!("**{}** joined the room.", app.display_username()),
@@ -422,8 +419,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
         };
         r.messages.push(join_msg);
         r.version += 1;
-        let room_base = r.messages.len(); // app_base + 1 (join msg)
-        (r.version, r.live_token_version, r.live_tokens.len(), app_base, room_base)
+        (r.version, r.live_token_version, r.live_tokens.len())
     };
 
     // attach shared_room so room_sync_user_msg/room_push_token work from this session
@@ -517,6 +513,8 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
                     });
 
                 if should_respond {
+                    let pre_respond_len = app.messages.len();
+                    let room_len_before_respond = room.lock().unwrap().messages.len();
                     app.start_stream();
                     if !stream_loop(&mut app, &mut stream, thinking_fwd, cfg.thinking_srv, cfg.yes) {
                         break;
@@ -525,9 +523,8 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
                     // append only the new messages this session produced (preserve join/presence msgs)
                     {
                         let mut r = room.lock().unwrap();
-                        let session_msgs = &app.messages[app_base..];
-                        let already = r.messages.len().saturating_sub(room_base);
-                        r.messages.extend(session_msgs.iter().skip(already).cloned());
+                        let already_in_room = r.messages.len() - room_len_before_respond;
+                        r.messages.extend(app.messages[pre_respond_len..].iter().skip(already_in_room).cloned());
                         r.version += 1;
                         known_version = r.version;
                         known_token_version = r.live_token_version;
@@ -577,27 +574,29 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
                 };
 
                 // delegate to send_message() to get pinned-file diffs and @path handling for free
+                // snapshot lengths BEFORE send_message so push logic is relative to this turn only
+                let pre_send_len = app.messages.len();
+                let room_len_before = room.lock().unwrap().messages.len();
                 app.input = input;
                 app.cursor_pos = app.input.len();
-                // tag the user message with the username
                 let display_name = app.display_username();
                 app.send_message();
                 if let Some(last) = app.messages.iter_mut().rev().find(|m| m.role == Role::User) {
                     last.tool_call = Some(display_name);
                 }
-                // immediately push user message — exclude the empty streaming placeholder
-                // that start_stream() added, so the post-stream push can count it correctly
+                // push user message — skip what room_sync_user_msg may have already pushed
                 {
                     let mut r = room.lock().unwrap();
-                    let session_msgs: Vec<_> = app.messages[app_base..].iter()
+                    let already_in_room = r.messages.len() - room_len_before;
+                    let new_msgs: Vec<_> = app.messages[pre_send_len..].iter()
                         .filter(|m| !(m.role == crate::app::Role::Assistant
                             && m.content.is_empty()
                             && m.thinking.is_empty()
                             && m.stats.is_none()))
+                        .skip(already_in_room)
                         .cloned()
                         .collect();
-                    let already = r.messages.len().saturating_sub(room_base);
-                    r.messages.extend(session_msgs.into_iter().skip(already));
+                    r.messages.extend(new_msgs);
                     r.version += 1;
                 }
 
@@ -609,9 +608,8 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
                 // append the assistant response (+ any tool turns) and clear live tokens
                 {
                     let mut r = room.lock().unwrap();
-                    let session_msgs = &app.messages[app_base..];
-                    let already = r.messages.len().saturating_sub(room_base);
-                    r.messages.extend(session_msgs.iter().skip(already).cloned());
+                    let already_in_room = r.messages.len() - room_len_before;
+                    r.messages.extend(app.messages[pre_send_len..].iter().skip(already_in_room).cloned());
                     r.version += 1;
                     r.live_tokens.clear();
                     r.live_token_version = 0;

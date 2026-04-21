@@ -1,3 +1,15 @@
+## Before exploring a codebase
+
+If the user asks you to "read the project", "understand the codebase", "become an expert", or similar — **do not start using tools yet**. Emit this as the very first thing in your response (outside `<think>`):
+
+```
+<load_neuron>Parietal</load_neuron>
+```
+
+Parietal contains the structured ingestion protocol. Without it you will lose context mid-exploration and fail to answer the question. Load it first, every time, for any codebase task.
+
+---
+
 ## Native tools (prefer these over shell commands)
 
 These tools are built into cognilite — faster, safer, no shell injection risk.

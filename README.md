@@ -55,8 +55,10 @@ cognilite  ›  gemma4:e2b  ○  😊  ctx 12% / 128k
 - **Multiline input** — `Ctrl+N` inserts a newline; input box grows automatically; full readline-style editing
 - **Paste support** — multiline paste from clipboard; newlines preserved
 - **Stop generation** — `Esc` while streaming cancels the current response
-- **Settings screen** — four tabs: context strategy, neurons, generation parameters, performance flags; persisted to `~/.config/cognilite/config.json`
+- **Settings screen** — five tabs: context strategy, neurons, generation parameters, performance flags, features; persisted to `~/.config/cognilite/config.json`
 - **Remote TUI mode** — connect to a remote cognilite server over WebSocket (`ws://host:port`) and use the full TUI as if the model were local: model selection, file picker browsing remote directories, `<preview>` tag opens files from the server in the local file panel, warmup spinner, all tag-driven widgets
+- **Multi-user rooms** — the local TUI always starts an embedded WS server; press `Ctrl+J` in chat to see/copy the room share URL; other users connect via `--remote` and join the same room; messages and live tokens sync in real time; mention a participant with `#username#id` or `#all` to trigger an auto-response from the AI
+- **Chat history export / import** — `Ctrl+S` saves the current conversation to a JSON file; `Ctrl+O` opens a file-picker to load a previously exported conversation
 - **F1 help popup** — keyboard shortcut reference available on all screens
 
 ## Requirements
@@ -316,6 +318,35 @@ Unlike a conventional chat API, the model in a WebSocket session runs on your ow
 - Pinned files and KV cache warmup work exactly as in the TUI
 - The conversation persists across multiple turns until the connection closes
 
+## Rooms
+
+The local TUI always starts an embedded WebSocket server on port 8765. Each TUI session owns a room identified by a UUID.
+
+Press `Ctrl+J` in chat to open the room share popup — it shows the full `ws://` URL ready to copy. Other users can join with:
+
+```bash
+cognilite --remote ws://your-ip:8765/id/<uuid>
+```
+
+### How rooms work
+
+- **Append-only history** — messages are stored in a shared room state; new members receive the full history on connect
+- **Live tokens** — while the AI is streaming, every token is pushed to the room so other participants see it in real time (shown as a `▸ username  token...` typing indicator)
+- **Presence** — join and leave events are injected as system messages in the chat
+- **Session identity** — each connection has a 4-char hex `session_id`; participants are identified as `username#id` to avoid collisions between same-named users
+- **Mention system** — WS sessions auto-respond to AI turns; use `#username#id` to address a specific participant, or `#all` to have the AI respond to everyone
+- **TUI behavior** — the local TUI only responds to direct user input; it does not auto-respond to room mentions
+
+### Username
+
+Your username is shown instead of "You" in chat and broadcast to room participants. Set it in **Settings → Features tab** or pass it as a query parameter when connecting remotely:
+
+```
+ws://host:8765/ws?username=alice
+```
+
+The username is persisted to `~/.config/cognilite/config.json`.
+
 ## Mode comparison
 
 | Feature | TUI | Remote TUI | Headless | HTTP Server | WebSocket |
@@ -350,6 +381,7 @@ Unlike a conventional chat API, the model in a WebSocket session runs on your ow
 | `Backspace` | Delete last search character |
 | `Esc` | Clear search filter |
 | `Tab` | Open settings |
+| `Ctrl+J` | Join a room (opens UUID input dialog) |
 | `F1` | Help popup |
 | `Ctrl+C` | Quit |
 
@@ -358,7 +390,7 @@ Unlike a conventional chat API, the model in a WebSocket session runs on your ow
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate items |
-| `Enter` / `Space` | Toggle option (Context, Neurons, Performance tabs) |
+| `Enter` / `Space` | Toggle option (Context, Neurons, Performance, Features tabs) |
 | `←` / `→` | Decrease / increase value (Generation tab) |
 | `r` | Reset to default (Generation tab) |
 | `Type` | Filter items in current tab |
@@ -417,6 +449,9 @@ Unlike a conventional chat API, the model in a WebSocket session runs on your ow
 | `Ctrl+Y` | Copy last response (input) / copy selected block (history) |
 | `Ctrl+L` | Clear conversation |
 | `Ctrl+P` | Open file picker (pin files to context) |
+| `Ctrl+S` | Export conversation to JSON |
+| `Ctrl+O` | Import conversation from JSON (file picker) |
+| `Ctrl+J` | Show room share URL popup |
 | `F1` | Toggle keyboard shortcut help popup |
 | `Ctrl+C` | Quit |
 
@@ -669,20 +704,26 @@ Use `←` / `→` to adjust, `r` to reset.
 | **Stable num_ctx** | on | Rounds context to powers of 2 to preserve KV cache across requests |
 | **Keep model alive** | off | Passes `keep_alive: -1` — prevents model unloading between requests |
 | **Warm-up cache** | on | Pre-fills KV cache with the system prompt on model load |
+
+### Features tab
+
+| Option | Default | Description |
+|--------|---------|-------------|
 | **Thinking** | on | Sends `"think": true` to Ollama — enables extended thinking for supported models (QwQ, Gemma 3, etc.) |
+| **Username** | `$USER` | Display name shown in chat and shared with room participants; editable inline |
 
 ## Architecture
 
 ```
 src/
-├── main.rs        — entry point, event loop, model loading, CLI arg parsing (--remote flag)
+├── main.rs        — entry point, event loop, model loading, CLI arg parsing; starts embedded WS server for local TUI
 ├── app.rs         — App state, message types, input editing, tag interception, tool/patch/ask/mood loop,
-│                    file picker/panel/pinned logic, highlight_code/highlight_file (syntect)
+│                    file picker/panel/pinned logic, room sync, export/import, highlight_code/highlight_file (syntect)
 ├── headless.rs    — headless mode: CLI arg struct, stream loop, stdin ask handler
 ├── server.rs      — HTTP server mode: TCP listener, per-connection handler, chunked streaming, argv builder; WebSocket upgrade routing
 ├── websocket.rs   — WebSocket server session: RFC 6455 handshake (SHA-1 inline), frame I/O, multi-turn stream loop,
-│                    pin/unpin handling, ls/ls_result, models/select_model handshake, file_preview
-├── ws_client.rs   — WebSocket client: TcpStream upgrade, masked frame I/O, frame type enum, background reader thread
+│                    room state (append-only history, live tokens, presence), mention detection, pin/unpin, ls, file_preview
+├── ws_client.rs   — WebSocket client: TcpStream upgrade, masked frame I/O, frame type enum (incl. room_update/room_token), background reader thread
 ├── synapse.rs     — Neuron/Synapse types, directory loader, tool context builder, .toml parser
 ├── events.rs      — key event dispatch (config / model select / remote connect / chat / history / ask / picker modes)
 ├── ollama.rs      — Ollama API: list_models, fetch_context_length, stream_chat (think param), warmup
@@ -736,6 +777,12 @@ struct App {
     ws_tx: Option<TcpStream>,
     ws_rx: Option<Receiver<WsClientFrame>>,
     remote_label: Option<String>,   // shown in title bar when connected remotely
+    // identity & rooms
+    username: String,               // display name (default: $USER), persisted
+    session_id: String,             // 4-char hex; disambiguates same-named participants
+    room_id: Option<String>,        // UUID of current room (abbreviated in header as ⬡ <8chars>)
+    shared_room: Option<SharedRoom>,// shared room state (local embedded server)
+    room_live: Option<(String, String)>, // (username, accumulated tokens) from another participant
 }
 
 enum AskKind        { Text, Confirm, Choice(Vec<String>) }

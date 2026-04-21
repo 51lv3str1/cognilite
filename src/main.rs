@@ -81,6 +81,7 @@ fn main() -> Result<()> {
             let room: crate::websocket::SharedRoom = Arc::new(Mutex::new(crate::websocket::RoomState {
                 messages: vec![], version: 0,
                 live_tokens: String::new(), live_token_version: 0, live_user: String::new(),
+                active_session_ids: std::collections::HashSet::new(),
             }));
             rooms.lock().unwrap().insert(room_id.clone(), room.clone());
             app.shared_room = Some(room);

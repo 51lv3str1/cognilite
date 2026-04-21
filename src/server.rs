@@ -244,6 +244,7 @@ fn resolve_room(path: &str, rooms: &crate::websocket::RoomRegistry) -> (String, 
         map.entry(id.clone()).or_insert_with(|| Arc::new(Mutex::new(crate::websocket::RoomState {
             messages: vec![], version: 0,
             live_tokens: String::new(), live_token_version: 0, live_user: String::new(),
+            active_session_ids: std::collections::HashSet::new(),
         }))).clone()
     };
     (id, room)

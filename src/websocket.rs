@@ -21,6 +21,7 @@ pub struct RoomState {
     pub live_tokens:        String,
     pub live_token_version: u64,
     pub live_user:          String, // username of whoever is currently generating
+    pub active_session_ids: std::collections::HashSet<String>,
 }
 
 pub type SharedRoom    = Arc<Mutex<RoomState>>;
@@ -394,6 +395,15 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
     //                      push app.messages[app_base..].skip(already_pushed)
     let (mut known_version, mut known_token_version, mut sent_token_len, app_base, room_base) = {
         let mut r = room.lock().unwrap();
+        // assign a server-side unique session ID for this participant
+        let assigned_id = loop {
+            let id = crate::app::new_session_id();
+            if !r.active_session_ids.contains(&id) {
+                r.active_session_ids.insert(id.clone());
+                break id;
+            }
+        };
+        app.session_id = assigned_id;
         app.messages = r.messages.clone();
         let app_base = r.messages.len();
         let join_msg = crate::app::Message {
@@ -643,9 +653,10 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
 
     let _ = stream.set_read_timeout(None);
     if !silent { eprintln!("[ws] {peer} disconnected (room {room_id})"); }
-    // push leave presence event to room
+    // push leave presence event to room and release session ID
     {
         let mut r = room.lock().unwrap();
+        r.active_session_ids.remove(&app.session_id);
         let leave_msg = crate::app::Message {
             role: crate::app::Role::Tool,
             content: format!("**{}** left the room.", app.display_username()),

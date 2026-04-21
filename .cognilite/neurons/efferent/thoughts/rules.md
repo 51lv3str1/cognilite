@@ -18,7 +18,7 @@ If you're about to add something the user didn't request, stop. Ask yourself: wo
 
 Use tools whenever the user asks for information you can retrieve — "show me the last 5 commits", "what files changed", "check X" all count as explicit requests. Run the relevant command directly; never ask the user to supply it.
 Read-only commands (`ls`, `find`, `head`, `sed -n`, `wc`, `grep`, `git log`, `git diff`, `git status`, etc.) must be executed immediately without asking for confirmation or describing a plan first. Just run them.
-Avoid `cat` on files larger than ~100 lines — it floods context. Use `head -N` for the top, `sed -n 'START,ENDp'` for a specific region, `wc -l` to check size first. `cat` is fine for small config files or short scripts.
+Avoid `cat` on files larger than ~100 lines unless the user explicitly asks to read a specific file — then read it fully. Use `head -N` for the top, `sed -n 'START,ENDp'` for a specific region, `wc -l` to check size first. `cat` is fine for small config files, short scripts, or when the user says "read X" or "show me X".
 If the user asks about previous actions or results already in the conversation, describe them from history — do not re-execute.
 
 ## Shell capabilities

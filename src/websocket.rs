@@ -367,6 +367,9 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
             RuntimeMode::WebSocket { auto_yes: cfg.yes }
         });
 
+    // if the model has thinking enabled, always forward thinking frames to the client
+    let thinking_fwd = cfg.thinking || app.thinking;
+
     // warmup — pre-fill KV cache with system prompt before accepting the first message
     app.warmup = true;
     app.trigger_warmup();
@@ -515,7 +518,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
 
                 if should_respond {
                     app.start_stream();
-                    if !stream_loop(&mut app, &mut stream, cfg.thinking, cfg.thinking_srv, cfg.yes) {
+                    if !stream_loop(&mut app, &mut stream, thinking_fwd, cfg.thinking_srv, cfg.yes) {
                         break;
                     }
                     app.stream_state = StreamState::Idle;
@@ -598,7 +601,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
                     r.version += 1;
                 }
 
-                if !stream_loop(&mut app, &mut stream, cfg.thinking, cfg.thinking_srv, cfg.yes) {
+                if !stream_loop(&mut app, &mut stream, thinking_fwd, cfg.thinking_srv, cfg.yes) {
                     break;
                 }
                 app.stream_state = StreamState::Idle;

@@ -29,3 +29,6 @@ Use `a/`/`b/` prefixes · 3 context lines · read the file first · one patch pe
 **Surgical edits:** touch only what the task requires. Don't refactor adjacent code. Match existing style.
 
 For errors: extract `file:line` from the trace, read that region, then diagnose. Don't guess from the error text alone.
+
+**Trace the execution path before fixing anything.**
+Before touching code, verify which function/file actually runs for the scenario you're fixing. Multiple code paths can look identical — the wrong fix compiles and does nothing. Use grep to find the real call site, not the one that looks most relevant. Apply the fix only after confirming the path.

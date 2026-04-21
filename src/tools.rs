@@ -165,7 +165,7 @@ pub fn glob_files(pattern: &str, working_dir: &Path) -> String {
 
     if tool_available("fd") {
         // fd: faster, respects .gitignore, excludes hidden dirs automatically
-        match run_tool("fd", &["--type", "f", "--color", "never", name_pat], working_dir) {
+        match run_tool("fd", &["--type", "f", "--color", "never", "--glob", name_pat], working_dir) {
             Ok(out) => {
                 if out.trim().is_empty() { "No files matched.".to_string() }
                 else {

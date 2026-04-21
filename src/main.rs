@@ -249,16 +249,22 @@ fn parse_remote_arg(argv: &[String]) -> Option<String> {
                 i += 1;
                 if i < argv.len() { params.push(format!("neuron_mode={}", argv[i])); }
             }
+            "--username" => {
+                i += 1;
+                if i < argv.len() { params.push(format!("username={}", url_encode(&argv[i]))); }
+            }
             _ => {}
         }
         i += 1;
     }
     // always identify as TUI client so the server injects the right runtime context
     params.push("client=tui".into());
-    // pass username so the server can tag messages with the sender's name
-    let username = app::load_config().username;
-    if !username.is_empty() {
-        params.push(format!("username={}", url_encode(&username)));
+    // pass username from client's own config if not explicitly overridden
+    if !params.iter().any(|p| p.starts_with("username=")) {
+        let username = app::load_config().username;
+        if !username.is_empty() {
+            params.push(format!("username={}", url_encode(&username)));
+        }
     }
     let sep = if url.contains('?') { '&' } else { '?' };
     url.push(sep);

@@ -1361,11 +1361,13 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
     } else {
         let esc_label = if app.stream_state == StreamState::Streaming { "stop" } else { "models" };
         Line::from(vec![
+            hint("Esc", esc_label),
+            Span::raw("  "),
+            hint("Ctrl+J", "room"),
+            Span::raw("  "),
             hint("Enter", "send"),
             Span::raw("  "),
             hint("Ctrl+N", "newline"),
-            Span::raw("  "),
-            hint("Esc", esc_label),
             Span::raw("  "),
             hint("Tab", "browse history"),
             Span::raw("  "),

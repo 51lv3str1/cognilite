@@ -1436,6 +1436,9 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 ("y  (in popup)",       "Copy URL to clipboard"),
                 ("—",                   "Others join via ws://your-ip:8765/id/{uuid}"),
                 ("—",                   "Joiners see full history + live token stream"),
+                ("—",                   "Each participant shown as  username#id"),
+                ("#name#id  /  #all",   "Mention a participant — triggers an AI response"),
+                ("▸ username …",        "Live typing indicator while another user streams"),
             ]),
         ];
         draw_help_popup(frame, app, area, SECTIONS);

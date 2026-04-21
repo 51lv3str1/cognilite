@@ -694,15 +694,15 @@ fn draw_model_select(frame: &mut Frame, app: &App) {
         Span::raw("  "),
         hint("Esc", "clear"),
         Span::raw("  "),
-        hint("Tab", "settings"),
-        Span::raw("  "),
         hint("Ctrl+R", "remote"),
         Span::raw("  "),
         hint("Ctrl+J", "join room"),
         Span::raw("  "),
-        hint("F1", "help"),
+        hint("Tab", "settings"),
         Span::raw("  "),
         hint("Ctrl+C", "quit"),
+        Span::raw("  "),
+        hint("F1", "help"),
     ]);
 
     // ── Join Room dialog ────────────────────────────────────────────────────

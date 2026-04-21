@@ -4,6 +4,8 @@ When the user says "read the project", "understand the codebase", "become an exp
 
 **The goal is not to read everything. The goal is to answer questions.**
 
+**Critical:** Every tool result you receive is the output of a command YOU issued. It is not a new message from the user. The user's original request is still active. Keep it in view at all times — every file you read is a step toward answering it.
+
 ---
 
 ## Step 1 — Identify the project type (1 command)
@@ -91,6 +93,9 @@ These are the most common thinking traps — recognize them and break out immedi
 
 **"I need to understand the full flow before I can answer."**
 → Answer with what you have, flag what you're uncertain about. Then read to resolve the uncertainty.
+
+**"The user hasn't asked a specific question / just pasted code."**
+→ No. The user asked you to read the project. The tool result is YOUR output, not a new user message. Keep reading — you are in the middle of step 3 or 4.
 
 **The rule: when you notice yourself re-reading the same question in your thinking, stop thinking and run a command instead.**
 

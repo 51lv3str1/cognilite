@@ -283,6 +283,7 @@ pub struct FilePanel {
     pub display_path: String,
     pub lines: Vec<Line<'static>>,
     pub scroll: usize,
+    pub h_scroll: usize,
     pub mtime: Option<std::time::SystemTime>,
     pub reloaded_at: Option<std::time::Instant>,
 }
@@ -2162,7 +2163,7 @@ impl App {
         if let Some(mt) = mtime {
             self.highlight_cache.insert(path.clone(), (mt, lines.clone()));
         }
-        self.file_panel = Some(FilePanel { path, display_path, lines, scroll: 0, mtime, reloaded_at: None });
+        self.file_panel = Some(FilePanel { path, display_path, lines, scroll: 0, h_scroll: 0, mtime, reloaded_at: None });
         self.file_panel_visible = true;
     }
 
@@ -2172,7 +2173,7 @@ impl App {
         let display_path = path.to_string_lossy().to_string();
         let lines = highlight_content(content, &path);
         self.file_panel = Some(FilePanel {
-            path, display_path, lines, scroll: 0,
+            path, display_path, lines, scroll: 0, h_scroll: 0,
             mtime: None, reloaded_at: None,
         });
         self.file_panel_visible = true;
@@ -2222,6 +2223,18 @@ impl App {
         if let Some(fp) = &mut self.file_panel {
             let max = fp.lines.len().saturating_sub(1);
             fp.scroll = (fp.scroll + 10).min(max);
+        }
+    }
+
+    pub fn file_panel_scroll_left(&mut self) {
+        if let Some(fp) = &mut self.file_panel {
+            fp.h_scroll = fp.h_scroll.saturating_sub(8);
+        }
+    }
+
+    pub fn file_panel_scroll_right(&mut self) {
+        if let Some(fp) = &mut self.file_panel {
+            fp.h_scroll = fp.h_scroll.saturating_add(8);
         }
     }
 

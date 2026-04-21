@@ -1531,7 +1531,7 @@ fn draw_file_panel(frame: &mut Frame, app: &App, area: Rect) {
     let start = fp.scroll.min(fp.lines.len());
     let visible = inner.height as usize;
     let lines: Vec<Line> = fp.lines[start..].iter().take(visible).cloned().collect();
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines).scroll((0, fp.h_scroll as u16)), inner);
 }
 
 fn draw_file_picker(frame: &mut Frame, app: &App, area: Rect) {

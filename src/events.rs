@@ -551,6 +551,8 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
             KeyCode::Esc | KeyCode::Char('q') => app.close_file_panel(),
             KeyCode::PageUp   => app.file_panel_scroll_up(),
             KeyCode::PageDown => app.file_panel_scroll_down(),
+            KeyCode::Left     => app.file_panel_scroll_left(),
+            KeyCode::Right    => app.file_panel_scroll_right(),
             _ => {}
         }
         return;

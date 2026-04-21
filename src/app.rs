@@ -356,7 +356,6 @@ pub struct App {
     pub keep_alive: bool,
     pub warmup: bool,
     pub thinking: bool,
-    pub perf_cursor: usize,
     pub features_cursor: usize,
     pub config_search: String,  // filter query for all config sections
     // model select
@@ -472,7 +471,6 @@ impl App {
             keep_alive: cfg.keep_alive,
             warmup: cfg.warmup,
             thinking: cfg.thinking,
-            perf_cursor: 0,
             features_cursor: 0,
             config_search: String::new(),
             models: Vec::new(),

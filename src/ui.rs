@@ -1429,9 +1429,11 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
                 ("Ctrl+C",              "Quit"),
                 ("F1",                  "Toggle this help"),
             ]),
-            ("Modes", &[
-                ("Ctrl+G",              "Plan mode — model describes plan only, no tool or patch execution"),
-                ("Ctrl+D",              "Auto-accept — patches and confirm asks are applied automatically"),
+            ("Modes  (Shift+Tab to cycle)", &[
+                ("Shift+Tab",           "Cycle: normal → plan → auto-accept → normal"),
+                ("normal",              "Default — asks permission before patches and confirms"),
+                ("plan",                "Model describes plan only, no tool or patch execution"),
+                ("auto-accept",         "Patches and confirm asks applied automatically"),
             ]),
             ("Rooms (multi-user)", &[
                 ("Ctrl+J",              "Show room UUID + shareable URL"),

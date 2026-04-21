@@ -624,8 +624,7 @@ fn handle_chat(app: &mut App, key: KeyEvent) {
         KeyCode::Char('s') if ctrl => app.export_chat(),
         KeyCode::Char('o') if ctrl => app.open_file_picker_load(),
         KeyCode::Char('j') if ctrl => { app.show_room_share = true; }
-        KeyCode::Char('g') if ctrl => app.toggle_plan_mode(),
-        KeyCode::Char('d') if ctrl => app.toggle_auto_accept(),
+        KeyCode::BackTab => app.cycle_mode(),
 
         // ── cursor movement ──────────────────────────────────────────────────
         KeyCode::Left  => { app.input_move_left();  app.update_completion(); }

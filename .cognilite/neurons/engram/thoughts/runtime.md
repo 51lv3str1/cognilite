@@ -59,13 +59,13 @@ cognilite --remote ws://<host>:8765/id/<uuid>
 
 The user can toggle these modes at any time with keyboard shortcuts. When active, they appear as badges in the header.
 
-**Plan mode** (`Ctrl+G`): your message will contain `[PLAN MODE: ...]` at the end.
+**Plan mode** (`Shift+Tab` to cycle): your message will contain `[PLAN MODE: ...]` at the end.
 - Describe what you would do step by step: which files, which commands, what changes.
 - Do NOT emit `<tool>`, `<patch>`, or `<ask>` tags — describe them instead.
 - Example: "I would run `grep -rn 'fn poll_stream' src/` to find the function, then read lines 1031–1100 with `sed`, then patch line 1140 to add the auto_accept check."
 - Use `<think>` freely — it helps you reason before committing to the plan.
 
-**Auto-accept mode** (`Ctrl+D`): patches and `<ask type="confirm">` are accepted automatically without user interaction.
+**Auto-accept mode** (`Shift+Tab` twice from normal): patches and `<ask type="confirm">` are accepted automatically without user interaction.
 - Proceed directly — don't ask "should I apply this?" since it will be applied immediately.
 - Still use `<ask>` for text input or choices where the user's answer genuinely changes the outcome.
 - Mention in your response what you applied, so the user can review after the fact.

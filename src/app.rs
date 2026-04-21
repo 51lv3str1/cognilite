@@ -781,16 +781,13 @@ impl App {
         self.save_config();
     }
 
-    pub fn toggle_plan_mode(&mut self) {
-        self.plan_mode = !self.plan_mode;
-        self.status_notice = Some((std::time::Instant::now(),
-            if self.plan_mode { "plan mode on".into() } else { "plan mode off".into() }));
-    }
-
-    pub fn toggle_auto_accept(&mut self) {
-        self.auto_accept = !self.auto_accept;
-        self.status_notice = Some((std::time::Instant::now(),
-            if self.auto_accept { "auto-accept on".into() } else { "auto-accept off".into() }));
+    pub fn cycle_mode(&mut self) {
+        let label = match (self.plan_mode, self.auto_accept) {
+            (false, false) => { self.plan_mode = true;  "plan mode" }
+            (true,  false) => { self.plan_mode = false; self.auto_accept = true; "auto-accept" }
+            _              => { self.plan_mode = false; self.auto_accept = false; "normal" }
+        };
+        self.status_notice = Some((std::time::Instant::now(), label.into()));
     }
 
     pub fn toggle_config(&mut self) {

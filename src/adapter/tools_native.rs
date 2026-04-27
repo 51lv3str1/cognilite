@@ -254,3 +254,95 @@ fn resolve(path_str: &str, working_dir: &Path) -> PathBuf {
     let p = Path::new(path_str);
     if p.is_absolute() { p.to_path_buf() } else { working_dir.join(p) }
 }
+
+// ── tree ──────────────────────────────────────────────────────────────────────
+
+/// `tree [path] [--depth=N]`. Lists project files indented by directory, with
+/// LOC counts for code files. Respects `.gitignore` if `fd` is available.
+pub fn tree(args: &str, working_dir: &Path) -> String {
+    let mut depth: usize = 3;
+    let mut path = ".".to_string();
+    for tok in args.split_whitespace() {
+        if let Some(n) = tok.strip_prefix("--depth=") {
+            depth = n.parse().unwrap_or(3);
+        } else if !tok.starts_with("--") {
+            path = tok.to_string();
+        }
+    }
+    let depth_str = depth.to_string();
+    let raw = if tool_available("fd") {
+        run_tool("fd", &["--max-depth", &depth_str, "--type", "f", ".", &path], working_dir)
+    } else {
+        run_tool("find", &[
+            &path, "-maxdepth", &depth_str, "-type", "f",
+            "-not", "-path", "*/target/*",
+            "-not", "-path", "*/.git/*",
+            "-not", "-path", "*/node_modules/*",
+            "-not", "-path", "*/.venv/*",
+        ], working_dir)
+    };
+    let raw = match raw { Ok(o) => o, Err(e) => return e };
+
+    let mut paths: Vec<&str> = raw.lines().collect();
+    paths.sort();
+
+    const CODE_EXTS: &[&str] = &[
+        "rs", "ts", "tsx", "js", "jsx", "py", "go", "rb", "java",
+        "c", "cpp", "cc", "h", "hpp", "swift", "kt", "scala",
+    ];
+    let mut out = String::new();
+    let mut last_dirs: Vec<String> = vec![];
+
+    for p in &paths {
+        let p_clean = p.strip_prefix("./").unwrap_or(p);
+        let parts: Vec<&str> = p_clean.split('/').collect();
+        if parts.is_empty() { continue; }
+        let file = parts[parts.len() - 1];
+        let dirs = &parts[..parts.len() - 1];
+
+        for (i, d) in dirs.iter().enumerate() {
+            if i >= last_dirs.len() || last_dirs[i] != *d {
+                out.push_str(&"  ".repeat(i));
+                out.push_str(d);
+                out.push_str("/\n");
+            }
+        }
+        last_dirs = dirs.iter().map(|s| s.to_string()).collect();
+
+        out.push_str(&"  ".repeat(dirs.len()));
+        out.push_str(file);
+
+        let ext = file.rsplit('.').next().unwrap_or("");
+        if CODE_EXTS.contains(&ext) {
+            let full = working_dir.join(p_clean);
+            if let Ok(content) = fs::read_to_string(&full) {
+                out.push_str(&format!(" ({})", content.lines().count()));
+            }
+        }
+        out.push('\n');
+    }
+
+    const MAX: usize = 32 * 1024;
+    if out.len() > MAX {
+        let mut cut = MAX;
+        while cut > 0 && !out.is_char_boundary(cut) { cut -= 1; }
+        out.truncate(cut);
+        out.push_str("\n[... tree truncated]");
+    }
+    out
+}
+
+/// Detects project markers (Cargo.toml, package.json, etc.) and returns a
+/// `<project_map>...</project_map>` block summarizing the tree, or None if
+/// the working_dir does not look like a project root.
+pub fn build_project_map(working_dir: &Path) -> Option<String> {
+    const MARKERS: &[&str] = &[
+        "Cargo.toml", "package.json", "pyproject.toml", "go.mod",
+        "deno.json", "Gemfile", "build.gradle", "pom.xml",
+    ];
+    let has_marker = MARKERS.iter().any(|m| working_dir.join(m).exists());
+    if !has_marker { return None; }
+    let map = tree("--depth=3", working_dir);
+    if map.trim().is_empty() { return None; }
+    Some(format!("<project_map>\n{}\n</project_map>", map.trim_end()))
+}

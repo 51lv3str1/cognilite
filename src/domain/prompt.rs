@@ -10,11 +10,16 @@ pub enum RuntimeMode {
     RemoteTui { auto_yes: bool },
 }
 
-pub fn build_runtime_context(model: &str, ctx_len: Option<u64>, mode: RuntimeMode) -> String {
+pub fn build_runtime_context(
+    model: &str,
+    ctx_len: Option<u64>,
+    mode: RuntimeMode,
+    project_map: Option<&str>,
+) -> String {
     let ctx_str = ctx_len
         .map(|n| format!("{}k", n / 1024))
         .unwrap_or_else(|| "unknown".to_string());
-    match mode {
+    let body = match mode {
         RuntimeMode::Tui => format!(
             "## Runtime context\n\nMode: **interactive TUI** · Model: `{model}` · Context window: {ctx_str}\n\n\
              The user is typing in the terminal UI. All features are available:\n\
@@ -75,6 +80,10 @@ pub fn build_runtime_context(model: &str, ctx_len: Option<u64>, mode: RuntimeMod
                  Use all features freely — the client handles them identically to the local TUI. {note}"
             )
         }
+    };
+    match project_map {
+        Some(map) if !map.is_empty() => format!("{body}\n\n{map}"),
+        _ => body,
     }
 }
 
@@ -271,9 +280,15 @@ mod tests {
 
     #[test]
     fn runtime_context_includes_model_and_ctx() {
-        let s = build_runtime_context("qwen3:8b", Some(8192), RuntimeMode::Tui);
+        let s = build_runtime_context("qwen3:8b", Some(8192), RuntimeMode::Tui, None);
         assert!(s.contains("qwen3:8b"));
         assert!(s.contains("8k"));
         assert!(s.contains("interactive TUI"));
+    }
+
+    #[test]
+    fn runtime_context_appends_project_map_when_present() {
+        let s = build_runtime_context("m", None, RuntimeMode::Tui, Some("<project_map>foo\n</project_map>"));
+        assert!(s.contains("<project_map>foo\n</project_map>"));
     }
 }

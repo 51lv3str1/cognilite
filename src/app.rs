@@ -589,7 +589,8 @@ impl App {
             self.current_mood = None;
             self.pending_patch = None;
             self.screen = Screen::Chat;
-            self.runtime_context = build_runtime_context(&name, self.context_length, RuntimeMode::Tui);
+            let project_map = crate::adapter::tools_native::build_project_map(&self.working_dir);
+            self.runtime_context = build_runtime_context(&name, self.context_length, RuntimeMode::Tui, project_map.as_deref());
 
             self.trigger_warmup();
         }

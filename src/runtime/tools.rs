@@ -8,7 +8,7 @@ impl App {
         let call = call.trim();
         let cmd = call.split_once(' ').map(|p| p.0).unwrap_or(call);
         let is_builtin = matches!(cmd,
-            "read_file" | "write_file" | "edit_file" | "grep_files" | "glob_files");
+            "read_file" | "write_file" | "edit_file" | "grep_files" | "glob_files" | "tree");
 
         // Gate destructive shell passthrough behind a confirm prompt unless
         // auto-accept is on. Built-ins bypass: write_file/edit_file are
@@ -40,6 +40,7 @@ impl App {
             "edit_file"  => Some(crate::adapter::tools_native::edit_file(full_args, &self.working_dir)),
             "grep_files" => Some(crate::adapter::tools_native::grep_files(full_args, &self.working_dir)),
             "glob_files" => Some(crate::adapter::tools_native::glob_files(full_args, &self.working_dir)),
+            "tree"       => Some(crate::adapter::tools_native::tree(full_args, &self.working_dir)),
             _ => None,
         };
 

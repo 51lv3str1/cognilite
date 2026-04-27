@@ -85,9 +85,11 @@ pub fn run(base_url: &str, args: HeadlessArgs) -> i32 {
     app.stream_state = StreamState::Idle;
     app.screen = crate::app::Screen::Chat;
 
+    let project_map = crate::adapter::tools_native::build_project_map(&app.working_dir);
     app.runtime_context = build_runtime_context(&model_name, app.context_length,
         if args.server_mode { RuntimeMode::Server { auto_yes: args.yes } }
-        else { RuntimeMode::Headless });
+        else { RuntimeMode::Headless },
+        project_map.as_deref());
 
     // pin files
     for path_str in &args.pin {

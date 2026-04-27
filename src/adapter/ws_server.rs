@@ -358,12 +358,14 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
     app.context_length = crate::adapter::ollama::fetch_context_length(base_url, &model_name);
     app.stream_state = StreamState::Idle;
     app.screen = crate::app::Screen::Chat;
+    let project_map = crate::adapter::tools_native::build_project_map(&app.working_dir);
     app.runtime_context = build_runtime_context(&model_name, app.context_length,
         if cfg.tui_client {
             RuntimeMode::RemoteTui { auto_yes: cfg.yes }
         } else {
             RuntimeMode::WebSocket { auto_yes: cfg.yes }
-        });
+        },
+        project_map.as_deref());
 
     // if the model has thinking enabled, always forward thinking frames to the client
     let thinking_fwd = cfg.thinking || app.thinking;

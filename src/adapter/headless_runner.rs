@@ -248,16 +248,7 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool, show_thin
                             .map(|n| format!("## Neuron: {}\n\n{}", n.name, n.system_prompt));
                         if let Some(content) = neuron_content {
                             if let Some(last) = app.messages.last_mut() {
-                                let sf = last.content.rfind("</think>").map(|i| i+8).unwrap_or(0);
-                                if let Some(p) = last.content[sf..].find("<load_neuron>") {
-                                    let abs = sf + p;
-                                    if let Some(end) = last.content[abs..].find("</load_neuron>") {
-                                        let tag_end = abs + end + 14;
-                                        let before = last.content[..abs].trim_end().to_string();
-                                        let after  = last.content[tag_end..].to_string();
-                                        last.content = before + &after;
-                                    }
-                                }
+                                crate::domain::tags::strip_tag(&mut last.content, "load_neuron");
                             }
                             app.injected_neurons.insert(name.clone());
                             let label = format!("Neuron \u{203a} {}", name);
@@ -342,16 +333,7 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool, show_thin
                     .and_then(|m| extract_mood_tag(&m.content));
                 if let Some(emoji) = mood {
                     if let Some(last) = app.messages.last_mut() {
-                        let sf = last.content.rfind("</think>").map(|i| i+8).unwrap_or(0);
-                        if let Some(p) = last.content[sf..].find("<mood>") {
-                            let abs = sf + p;
-                            if let Some(end) = last.content[abs..].find("</mood>") {
-                                let tag_end = abs + end + 7;
-                                let before = last.content[..abs].trim_end().to_string();
-                                let after  = last.content[tag_end..].to_string();
-                                last.content = before + &after;
-                            }
-                        }
+                        crate::domain::tags::strip_tag(&mut last.content, "mood");
                     }
                     app.current_mood = Some(emoji);
                 }

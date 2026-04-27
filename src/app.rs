@@ -1038,16 +1038,7 @@ impl App {
                         if let Some((emoji, in_thinking)) = mood_info {
                             if let Some(last) = self.messages.last_mut() {
                                 let target = if in_thinking { &mut last.thinking } else { &mut last.content };
-                                let scan_from = target.rfind("</think>").map(|i| i + 8).unwrap_or(0);
-                                if let Some(p) = target[scan_from..].find("<mood>") {
-                                    let abs = scan_from + p;
-                                    if let Some(end) = target[abs..].find("</mood>") {
-                                        let tag_end = abs + end + 7;
-                                        let before = target[..abs].trim_end().to_string();
-                                        let after = target[tag_end..].to_string();
-                                        *target = before + &after;
-                                    }
-                                }
+                                crate::domain::tags::strip_tag(target, "mood");
                             }
                             self.current_mood = Some(emoji);
                         }
@@ -1082,16 +1073,7 @@ impl App {
                                 if let Some(content) = neuron_content {
                                     // strip <load_neuron> tag from display only
                                     if let Some(last) = self.messages.last_mut() {
-                                        let scan_from = last.content.rfind("</think>").map(|i| i + 8).unwrap_or(0);
-                                        if let Some(p) = last.content[scan_from..].find("<load_neuron>") {
-                                            let abs = scan_from + p;
-                                            if let Some(end) = last.content[abs..].find("</load_neuron>") {
-                                                let tag_end = abs + end + 14;
-                                                let before = last.content[..abs].trim_end().to_string();
-                                                let after = last.content[tag_end..].to_string();
-                                                last.content = before + &after;
-                                            }
-                                        }
+                                        crate::domain::tags::strip_tag(&mut last.content, "load_neuron");
                                         last.thinking_secs = self.thinking_end_secs
                                             .or_else(|| self.stream_started_at.map(|t| t.elapsed().as_secs_f64()));
                                     }

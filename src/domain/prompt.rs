@@ -199,3 +199,81 @@ pub fn build_raw_prompt(
     }
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_chatml() {
+        assert!(matches!(detect_template_format("{{ if .System }}<|im_start|>system"), Some(TemplateFormat::ChatML)));
+    }
+
+    #[test]
+    fn detect_llama3() {
+        assert!(matches!(detect_template_format("<|start_header_id|>system"), Some(TemplateFormat::Llama3)));
+    }
+
+    #[test]
+    fn detect_gemma() {
+        assert!(matches!(detect_template_format("<start_of_turn>user"), Some(TemplateFormat::Gemma)));
+    }
+
+    #[test]
+    fn detect_unknown_returns_none() {
+        assert!(detect_template_format("custom template no markers").is_none());
+    }
+
+    #[test]
+    fn raw_chatml_open_assistant_when_last_is_user() {
+        let h = vec![("user".into(), "hi".into())];
+        let p = build_raw_prompt(TemplateFormat::ChatML, Some("sys"), &h);
+        assert!(p.contains("<|im_start|>system\nsys<|im_end|>"));
+        assert!(p.contains("<|im_start|>user\nhi<|im_end|>"));
+        assert!(p.ends_with("<|im_start|>assistant\n"));
+    }
+
+    #[test]
+    fn raw_chatml_keeps_assistant_open_when_last_is_assistant() {
+        let h = vec![
+            ("user".into(), "hi".into()),
+            ("assistant".into(), "partial response".into()),
+        ];
+        let p = build_raw_prompt(TemplateFormat::ChatML, None, &h);
+        // last assistant turn must not be closed
+        assert!(p.ends_with("<|im_start|>assistant\npartial response"));
+        assert!(!p.contains("partial response<|im_end|>"));
+    }
+
+    #[test]
+    fn raw_llama3_starts_with_begin_of_text() {
+        let h = vec![("user".into(), "hi".into())];
+        let p = build_raw_prompt(TemplateFormat::Llama3, None, &h);
+        assert!(p.starts_with("<|begin_of_text|>"));
+        assert!(p.ends_with("<|start_header_id|>assistant<|end_header_id|>\n\n"));
+    }
+
+    #[test]
+    fn raw_gemma_inlines_system_into_first_user() {
+        let h = vec![("user".into(), "hi".into())];
+        let p = build_raw_prompt(TemplateFormat::Gemma, Some("sys"), &h);
+        // system gets prepended to the first user turn body
+        assert!(p.contains("<start_of_turn>user\nsys\n\nhi<end_of_turn>"));
+        assert!(p.ends_with("<start_of_turn>model\n"));
+    }
+
+    #[test]
+    fn raw_gemma_no_user_turn_emits_bare_system() {
+        let h: Vec<(String, String)> = vec![];
+        let p = build_raw_prompt(TemplateFormat::Gemma, Some("sys"), &h);
+        assert!(p.contains("<start_of_turn>user\nsys<end_of_turn>"));
+    }
+
+    #[test]
+    fn runtime_context_includes_model_and_ctx() {
+        let s = build_runtime_context("qwen3:8b", Some(8192), RuntimeMode::Tui);
+        assert!(s.contains("qwen3:8b"));
+        assert!(s.contains("8k"));
+        assert!(s.contains("interactive TUI"));
+    }
+}

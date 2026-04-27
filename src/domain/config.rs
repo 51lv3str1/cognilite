@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use serde::Deserialize;
 
 /// Generation parameter definitions: (name, description, default, min, max, step)
 pub const GEN_PARAMS: &[(&str, &str, f64, f64, f64, f64)] = &[
@@ -41,10 +42,30 @@ impl NeuronMode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct NeuronPreset {
     pub name: String,
     pub enabled: Vec<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ConfigFile {
+    ctx_strategy: Option<String>,
+    disabled_neurons: Vec<String>,
+    on_demand_neurons: Vec<String>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    repeat_penalty: Option<f64>,
+    thinking_budget: Option<f64>,
+    ctx_pow2: Option<bool>,
+    keep_alive: Option<bool>,
+    warmup: Option<bool>,
+    thinking: Option<bool>,
+    neuron_mode: Option<String>,
+    neuron_presets: Vec<NeuronPreset>,
+    active_preset: Option<String>,
+    username: Option<String>,
 }
 
 pub struct Config {
@@ -75,50 +96,27 @@ pub fn default_username() -> String {
 }
 
 pub fn load_config() -> Config {
-    let default = Config {
-        ctx_strategy: CtxStrategy::Dynamic,
-        disabled_neurons: Default::default(),
-        on_demand_neurons: Default::default(),
-        gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2, GEN_PARAMS[3].2],
-        ctx_pow2: true, keep_alive: false, warmup: true, thinking: true,
-        neuron_mode: NeuronMode::Manual, neuron_presets: Vec::new(), active_preset: None,
-        username: default_username(),
-    };
-    let path = match config_path() { Some(p) => p, None => return default };
-    let Ok(text) = std::fs::read_to_string(&path) else { return default };
-    let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else { return default };
-    let ctx_strategy = val.get("ctx_strategy")
-        .and_then(|v| v.as_str()).map(CtxStrategy::from_str).unwrap_or(CtxStrategy::Dynamic);
-    let disabled_neurons = val.get("disabled_neurons")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    let file: ConfigFile = config_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
-    let on_demand_neurons = val.get("on_demand_neurons")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-    let gen_params = [
-        val.get("temperature").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[0].2),
-        val.get("top_p").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[1].2),
-        val.get("repeat_penalty").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[2].2),
-        val.get("thinking_budget").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[3].2),
-    ];
-    let ctx_pow2   = val.get("ctx_pow2").and_then(|v| v.as_bool()).unwrap_or(true);
-    let keep_alive = val.get("keep_alive").and_then(|v| v.as_bool()).unwrap_or(false);
-    let warmup     = val.get("warmup").and_then(|v| v.as_bool()).unwrap_or(true);
-    let thinking   = val.get("thinking").and_then(|v| v.as_bool()).unwrap_or(true);
-    let neuron_mode = val.get("neuron_mode").and_then(|v| v.as_str())
-        .map(NeuronMode::from_str).unwrap_or(NeuronMode::Manual);
-    let neuron_presets = val.get("neuron_presets").and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|p| {
-            let name    = p.get("name")?.as_str()?.to_string();
-            let enabled = p.get("enabled")?.as_array()?
-                .iter().filter_map(|v| v.as_str().map(String::from)).collect();
-            Some(NeuronPreset { name, enabled })
-        }).collect())
-        .unwrap_or_default();
-    let active_preset = val.get("active_preset").and_then(|v| v.as_str()).map(String::from);
-    let username = val.get("username").and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(default_username);
-    Config { ctx_strategy, disabled_neurons, on_demand_neurons, gen_params, ctx_pow2, keep_alive, warmup, thinking, neuron_mode, neuron_presets, active_preset, username }
+    Config {
+        ctx_strategy: file.ctx_strategy.as_deref().map(CtxStrategy::from_str).unwrap_or(CtxStrategy::Dynamic),
+        disabled_neurons: file.disabled_neurons.into_iter().collect(),
+        on_demand_neurons: file.on_demand_neurons.into_iter().collect(),
+        gen_params: [
+            file.temperature.unwrap_or(GEN_PARAMS[0].2),
+            file.top_p.unwrap_or(GEN_PARAMS[1].2),
+            file.repeat_penalty.unwrap_or(GEN_PARAMS[2].2),
+            file.thinking_budget.unwrap_or(GEN_PARAMS[3].2),
+        ],
+        ctx_pow2: file.ctx_pow2.unwrap_or(true),
+        keep_alive: file.keep_alive.unwrap_or(false),
+        warmup: file.warmup.unwrap_or(true),
+        thinking: file.thinking.unwrap_or(true),
+        neuron_mode: file.neuron_mode.as_deref().map(NeuronMode::from_str).unwrap_or(NeuronMode::Manual),
+        neuron_presets: file.neuron_presets,
+        active_preset: file.active_preset,
+        username: file.username.filter(|s| !s.is_empty()).unwrap_or_else(default_username),
+    }
 }

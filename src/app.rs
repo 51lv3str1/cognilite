@@ -12,81 +12,12 @@ use crate::adapter::ollama::{ChatMessage, ModelEntry, StreamChunk};
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static THEME_SET: OnceLock<ThemeSet>   = OnceLock::new();
 
-/// Generation parameter definitions: (name, description, default, min, max, step)
-pub const GEN_PARAMS: &[(&str, &str, f64, f64, f64, f64)] = &[
-    ("temperature",     "randomness of output",              0.8,    0.0, 2.0,     0.05),
-    ("top_p",           "nucleus sampling cutoff",           0.9,    0.0, 1.0,     0.05),
-    ("repeat_penalty",  "repetition penalty",                1.1,    0.5, 2.0,     0.05),
-    ("thinking_budget", "max thinking tokens (0=unlimited)", 0.0,    0.0, 32768.0, 512.0),
-];
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Screen {
     Config,
     ModelSelect,
     RemoteConnect,
     Chat,
-}
-
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum CtxStrategy {
-    Dynamic, // max(8192, used_tokens * 2) — faster, smaller KV cache
-    Full,    // model's max context length — slower but never truncates history
-}
-
-impl CtxStrategy {
-    pub fn index(&self) -> usize {
-        match self { CtxStrategy::Dynamic => 0, CtxStrategy::Full => 1 }
-    }
-    fn from_index(i: usize) -> Self {
-        match i { 1 => CtxStrategy::Full, _ => CtxStrategy::Dynamic }
-    }
-    fn as_str(&self) -> &'static str {
-        match self { CtxStrategy::Dynamic => "dynamic", CtxStrategy::Full => "full" }
-    }
-    pub fn from_str(s: &str) -> Self {
-        match s { "full" => CtxStrategy::Full, _ => CtxStrategy::Dynamic }
-    }
-}
-
-fn config_path() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config/cognilite/config.json"))
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum NeuronMode { Manual, Smart, Presets }
-
-impl NeuronMode {
-    pub fn as_str(&self) -> &'static str {
-        match self { NeuronMode::Manual => "manual", NeuronMode::Smart => "smart", NeuronMode::Presets => "presets" }
-    }
-    pub fn from_str(s: &str) -> Self {
-        match s { "smart" => NeuronMode::Smart, "presets" => NeuronMode::Presets, _ => NeuronMode::Manual }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct NeuronPreset {
-    pub name: String,
-    pub enabled: Vec<String>,
-}
-
-pub struct Config {
-    pub ctx_strategy: CtxStrategy,
-    pub disabled_neurons: std::collections::HashSet<String>,
-    // Smart mode: neurons that start unloaded and are pulled in via <load_neuron>.
-    // Any enabled neuron NOT in this set is included in the initial system prompt.
-    pub on_demand_neurons: std::collections::HashSet<String>,
-    pub gen_params: [f64; 4],
-    pub ctx_pow2: bool,
-    pub keep_alive: bool,
-    pub warmup: bool,
-    pub thinking: bool,
-    pub neuron_mode: NeuronMode,
-    pub neuron_presets: Vec<NeuronPreset>,
-    pub active_preset: Option<String>,
-    pub username: String,
 }
 
 /// Short unique ID (4 hex chars) to disambiguate participants with the same name.
@@ -103,12 +34,6 @@ pub fn new_session_id() -> String {
         buf = [v as u8, (v >> 8) as u8, (v >> 16) as u8];
     }
     format!("{:02x}{:02x}{:02x}", buf[0], buf[1], buf[2])
-}
-
-pub fn default_username() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "user".to_string())
 }
 
 /// Strip version tag from model name: "qwen3.6:latest" → "qwen3.6"
@@ -157,75 +82,22 @@ pub fn is_mentioned(display_username: &str, content: &str) -> bool {
     mentions.iter().any(|m| m == &full || m == "all")
 }
 
-pub fn load_config() -> Config {
-    let default = Config {
-        ctx_strategy: CtxStrategy::Dynamic,
-        disabled_neurons: Default::default(),
-        on_demand_neurons: Default::default(),
-        gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2, GEN_PARAMS[3].2],
-        ctx_pow2: true, keep_alive: false, warmup: true, thinking: true,
-        neuron_mode: NeuronMode::Manual, neuron_presets: Vec::new(), active_preset: None,
-        username: default_username(),
-    };
-    let path = match config_path() { Some(p) => p, None => return default };
-    let Ok(text) = std::fs::read_to_string(&path) else { return default };
-    let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else { return default };
-    let ctx_strategy = val.get("ctx_strategy")
-        .and_then(|v| v.as_str()).map(CtxStrategy::from_str).unwrap_or(CtxStrategy::Dynamic);
-    let disabled_neurons = val.get("disabled_neurons")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-    let on_demand_neurons = val.get("on_demand_neurons")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-    let gen_params = [
-        val.get("temperature").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[0].2),
-        val.get("top_p").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[1].2),
-        val.get("repeat_penalty").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[2].2),
-        val.get("thinking_budget").and_then(|v| v.as_f64()).unwrap_or(GEN_PARAMS[3].2),
-    ];
-    let ctx_pow2   = val.get("ctx_pow2").and_then(|v| v.as_bool()).unwrap_or(true);
-    let keep_alive = val.get("keep_alive").and_then(|v| v.as_bool()).unwrap_or(false);
-    let warmup     = val.get("warmup").and_then(|v| v.as_bool()).unwrap_or(true);
-    let thinking   = val.get("thinking").and_then(|v| v.as_bool()).unwrap_or(true);
-    let neuron_mode = val.get("neuron_mode").and_then(|v| v.as_str())
-        .map(NeuronMode::from_str).unwrap_or(NeuronMode::Manual);
-    let neuron_presets = val.get("neuron_presets").and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|p| {
-            let name    = p.get("name")?.as_str()?.to_string();
-            let enabled = p.get("enabled")?.as_array()?
-                .iter().filter_map(|v| v.as_str().map(String::from)).collect();
-            Some(NeuronPreset { name, enabled })
-        }).collect())
-        .unwrap_or_default();
-    let active_preset = val.get("active_preset").and_then(|v| v.as_str()).map(String::from);
-    let username = val.get("username").and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(default_username);
-    Config { ctx_strategy, disabled_neurons, on_demand_neurons, gen_params, ctx_pow2, keep_alive, warmup, thinking, neuron_mode, neuron_presets, active_preset, username }
-}
-
 pub fn fuzzy_match(query: &str, target: &str) -> bool {
     if query.is_empty() { return true; }
     target.to_lowercase().contains(&query.to_lowercase())
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum Role {
-    User,
-    Assistant,
-    Tool, // tool results — sent to the model as "user" turns
-}
-
-impl Role {
-    pub fn to_api_str(&self) -> &'static str {
-        match self {
-            Role::User | Role::Tool => "user",
-            Role::Assistant         => "assistant",
-        }
-    }
-}
+pub use crate::domain::config::{
+    CtxStrategy, GEN_PARAMS, NeuronMode, NeuronPreset, config_path, default_username, load_config,
+};
+pub use crate::domain::message::{Attachment, AttachmentKind, Message, Role, TokenStats};
+pub use crate::domain::tags::{
+    AskKind, InputRequest, extract_ask_tag, extract_load_neuron_tag, extract_mood_tag,
+    extract_patch_tag, extract_preview_tag, extract_tool_call,
+};
+pub use crate::domain::prompt::{
+    RuntimeMode, build_raw_prompt, build_runtime_context, detect_template_format,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompletionKind {
@@ -233,13 +105,7 @@ pub enum CompletionKind {
     Template,
 }
 
-pub struct PinnedFile {
-    pub path: PathBuf,
-    pub display: String,          // relative path shown in UI
-    pub content: String,          // snapshot at last warmup / last send
-    pub mtime: Option<std::time::SystemTime>,
-    pub changed: bool,            // mtime differs from snapshot
-}
+pub use crate::runtime::pinned::PinnedFile;
 
 #[derive(Clone)]
 pub enum FilePickerEntry {
@@ -267,29 +133,6 @@ pub struct FilePicker {
     pub mode: FilePickerMode,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct TokenStats {
-    pub response_tokens: u64,
-    pub tokens_per_sec: f64,
-    pub thinking_secs: Option<f64>, // time until first content token (thinking phase only)
-    pub wall_secs: f64,             // total wall-clock time from send to done
-    pub prompt_eval_count: u64,     // tokens Ollama actually re-evaluated (0 = cache hit)
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum AttachmentKind {
-    Text,
-    Image,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Attachment {
-    pub filename: String,
-    pub path: PathBuf,
-    pub kind: AttachmentKind,
-    pub size: usize,
-}
-
 pub struct FilePanel {
     pub path: PathBuf,
     pub display_path: String,
@@ -298,20 +141,6 @@ pub struct FilePanel {
     pub h_scroll: usize,
     pub mtime: Option<std::time::SystemTime>,
     pub reloaded_at: Option<std::time::Instant>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Message {
-    pub role: Role,
-    pub content: String,       // display content (without file bodies)
-    pub llm_content: String,   // content sent to model (includes file bodies)
-    pub images: Vec<String>,   // base64 images
-    pub attachments: Vec<Attachment>,
-    pub thinking: String,
-    pub thinking_secs: Option<f64>, // set on intermediate messages interrupted by a tool call
-    pub stats: Option<TokenStats>,
-    pub tool_call: Option<String>,     // "Neuron › trigger" label, set for Role::Tool messages
-    pub tool_collapsed: bool,          // tool result body hidden by default
 }
 
 #[derive(Debug, PartialEq)]
@@ -326,19 +155,6 @@ pub enum ChatFocus {
     Input,
     History,
     FilePanel,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AskKind {
-    Text,            // free text — user types, Enter submits
-    Confirm,         // yes/no — y/Enter = Yes, n/Esc = No
-    Choice(Vec<String>), // pick one — ↑↓ navigate, Enter selects
-}
-
-#[derive(Debug, Clone)]
-pub struct InputRequest {
-    pub question: String, // shown in UI (empty for Choice — question is in model's preceding text)
-    pub kind: AskKind,
 }
 
 #[derive(Debug)]
@@ -2287,46 +2103,6 @@ impl App {
         });
     }
 
-    /// Check mtime of all pinned files and update `changed` flag.
-    pub fn check_pinned_files(&mut self) {
-        for pf in &mut self.pinned_files {
-            let new_mtime = pf.path.metadata().ok().and_then(|m| m.modified().ok());
-            pf.changed = new_mtime != pf.mtime;
-        }
-    }
-
-    /// Generate diffs for changed pinned files, update snapshots, return note for llm_content.
-    fn collect_pinned_diffs(&mut self) -> String {
-        let mut notes: Vec<String> = Vec::new();
-        for pf in &mut self.pinned_files {
-            let Ok(new_content) = std::fs::read_to_string(&pf.path) else { continue };
-            let new_mtime = pf.path.metadata().ok().and_then(|m| m.modified().ok());
-            if new_mtime == pf.mtime && new_content == pf.content { continue; }
-            let diff = file_diff(&pf.content, &new_content, &pf.display);
-            if !diff.is_empty() {
-                notes.push(format!("[{} changed since your last response]\n```diff\n{}\n```", pf.display, diff.trim()));
-            }
-            pf.content = new_content;
-            pf.mtime   = new_mtime;
-            pf.changed = false;
-        }
-        notes.join("\n\n")
-    }
-
-    pub fn pin_file(&mut self, display: String) {
-        if self.pinned_files.iter().any(|pf| pf.display == display) { return; }
-        let path = self.working_dir.join(&display);
-        let Ok(content) = std::fs::read_to_string(&path) else { return };
-        let mtime = path.metadata().ok().and_then(|m| m.modified().ok());
-        self.pinned_files.push(PinnedFile { path, display, content, mtime, changed: false });
-        self.trigger_warmup();
-    }
-
-    pub fn unpin_file(&mut self, display: &str) {
-        self.pinned_files.retain(|pf| pf.display != display);
-        self.trigger_warmup();
-    }
-
     pub fn open_file_picker(&mut self) {
         if self.ws_tx.is_some() {
             self.request_server_ls(".");
@@ -2708,149 +2484,6 @@ impl App {
             }
         }
     }
-
-    // --- synapse execution ---
-
-    pub fn handle_tool_call(&mut self, call: &str) {
-        let call = call.trim();
-        let cmd = call.split_once(' ').map(|p| p.0).unwrap_or(call);
-        let is_builtin = matches!(cmd,
-            "read_file" | "write_file" | "edit_file" | "grep_files" | "glob_files");
-
-        // Gate destructive shell passthrough behind a confirm prompt unless
-        // auto-accept is on. Built-ins bypass: write_file/edit_file are
-        // explicit about the target path so the user already sees the impact;
-        // read_file/grep_files/glob_files are read-only.
-        if !is_builtin && !self.auto_accept && is_destructive_shell(call) {
-            self.pending_tool_call = Some(call.to_string());
-            self.ask = Some(InputRequest {
-                question: format!("Run destructive shell command? `{call}`"),
-                kind: AskKind::Confirm,
-            });
-            self.ask_cursor = 0;
-            return;
-        }
-
-        self.execute_tool_call(call);
-    }
-
-    fn execute_tool_call(&mut self, call: &str) {
-        let (cmd, args) = call.split_once(' ').unwrap_or((call, ""));
-        let args = args.trim().trim_start_matches('@');
-
-        // built-in native tools — checked before synapses
-        // write_file and edit_file use the full call body (multi-line content after cmd)
-        let full_args = call.splitn(2, char::is_whitespace).nth(1).unwrap_or("").trim_start_matches('@');
-        let builtin_result = match cmd {
-            "read_file"  => Some(crate::adapter::tools_native::read_file(full_args, &self.working_dir)),
-            "write_file" => Some(crate::adapter::tools_native::write_file(full_args, &self.working_dir)),
-            "edit_file"  => Some(crate::adapter::tools_native::edit_file(full_args, &self.working_dir)),
-            "grep_files" => Some(crate::adapter::tools_native::grep_files(full_args, &self.working_dir)),
-            "glob_files" => Some(crate::adapter::tools_native::glob_files(full_args, &self.working_dir)),
-            _ => None,
-        };
-
-        if let Some(result) = builtin_result {
-            let tool_label = format!("built-in \u{203a} {cmd}");
-            return self.push_tool_result(call, result, tool_label, args);
-        }
-
-        // search across all neurons for a matching behaviour
-        let found = self.neurons.iter().find_map(|n| {
-            n.synapses.iter().find(|s| s.trigger == cmd).map(|s| (n.name.clone(), s.clone()))
-        });
-
-        // fall back to shell passthrough if no specific behaviour matched
-        let shell_neuron = if found.is_none() {
-            self.neurons.iter().find(|n| n.shell)
-        } else {
-            None
-        };
-
-        let result = if let Some((_, b)) = &found {
-            let crate::domain::neuron::SynapseKind::Tool { command, .. } = &b.kind;
-            execute_command(command, args, &self.working_dir)
-        } else if shell_neuron.is_some() {
-            execute_command(cmd, args, &self.working_dir)
-        } else {
-            format!("unknown tool: {cmd}")
-        };
-
-        let tool_label = found
-            .as_ref()
-            .map(|(neuron_name, b)| format!("{} \u{203a} {}", neuron_name, b.trigger))
-            .or_else(|| shell_neuron.map(|n| format!("{} \u{203a} {}", n.name, cmd)))
-            .unwrap_or_else(|| cmd.to_string());
-
-        self.push_tool_result(call, result, tool_label, args);
-    }
-
-    fn push_tool_result(&mut self, call: &str, result: String, tool_label: String, args: &str) {
-        let filename = Path::new(args)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| if args.is_empty() { ".".to_string() } else { args.to_string() });
-        let size = result.len();
-
-        // Inject result into the last assistant message's llm_content so the model
-        // never sees tool output as a user-role message — it's part of its own turn.
-        // Fallback: if we reach here without an assistant turn to own the output
-        // (rare — means a tool call ran outside the normal stream lifecycle),
-        // create a minimal assistant placeholder so the result isn't dropped
-        // silently. Empty content keeps it invisible in the UI.
-        let owned = matches!(self.messages.last(), Some(m) if m.role == Role::Assistant);
-        if !owned {
-            self.messages.push(Message {
-                role: Role::Assistant,
-                content: String::new(),
-                llm_content: String::new(),
-                images: vec![],
-                attachments: vec![],
-                thinking: String::new(),
-                thinking_secs: None,
-                stats: None,
-                tool_call: None,
-                tool_collapsed: false,
-            });
-        }
-        if let Some(last) = self.messages.last_mut() {
-            last.llm_content.push_str(&format!("\n[Tool output for: {call}]\n{result}"));
-        }
-
-        const MAX_DISPLAY_LINES: usize = 15;
-        let display_content = {
-            let count = result.lines().count();
-            if count > MAX_DISPLAY_LINES {
-                let head: String = result.lines().take(MAX_DISPLAY_LINES).collect::<Vec<_>>().join("\n");
-                format!("{head}\n[... {} more lines — full output sent to model]", count - MAX_DISPLAY_LINES)
-            } else {
-                result
-            }
-        };
-
-        // Display-only block (llm_content empty → excluded from API).
-        self.messages.push(Message {
-            role: Role::Tool,
-            content: display_content,
-            llm_content: String::new(),
-            images: vec![],
-            attachments: vec![Attachment {
-                filename,
-                path: PathBuf::new(),
-                kind: AttachmentKind::Text,
-                size,
-            }],
-            thinking: String::new(),
-            thinking_secs: None,
-            stats: None,
-            tool_call: Some(tool_label),
-            tool_collapsed: true,
-        });
-
-        self.auto_scroll = true;
-        self.start_stream();
-    }
-
 
     // --- input editing helpers ---
 
@@ -3251,118 +2884,6 @@ impl App {
 // ── tool execution ────────────────────────────────────────────────────────────
 
 /// Returns the content between `<tool>` and `</tool>` if both tags are present,
-/// ignoring anything inside `<think>...</think>` blocks (model reasoning).
-/// Returns true if `pos` falls inside a triple-backtick code fence in `text`.
-fn is_in_code_block(text: &str, pos: usize) -> bool {
-    text[..pos].matches("```").count() % 2 == 1
-}
-
-pub fn extract_tool_call(content: &str) -> Option<&str> {
-    // if a <think> block is open but not yet closed, we're still inside reasoning — skip
-    let scan = match content.rfind("</think>") {
-        Some(i) => &content[i + 8..],  // only look after the closing think tag
-        None => {
-            if content.contains("<think>") {
-                return None;            // still inside an open <think> block
-            }
-            content
-        }
-    };
-    let tag_pos = scan.find("<tool>")?;
-    if is_in_code_block(scan, tag_pos) { return None; }
-    let start = tag_pos + 6;
-    let end   = scan.find("</tool>")?;
-    if end >= start { Some(&scan[start..end]) } else { None }
-}
-
-/// Returns true if the shell command line includes a destructive operation
-/// that should require explicit user confirmation. Conservative — false
-/// positives are preferred to false negatives. Skips `sudo` prefix and
-/// resolves `/usr/bin/rm` → `rm` so quoted paths don't slip through.
-fn is_destructive_shell(call: &str) -> bool {
-    const DESTRUCTIVE: &[&str] = &[
-        "rm", "rmdir", "mv", "dd", "mkfs", "shred",
-        "truncate", "chmod", "chown", "chgrp",
-    ];
-    for segment in call.split(|c: char| matches!(c, ';' | '|' | '&')) {
-        let mut tokens = segment.split_whitespace();
-        let mut first = tokens.next().unwrap_or("");
-        if first == "sudo" { first = tokens.next().unwrap_or(""); }
-        let basename = first.rsplit('/').next().unwrap_or(first);
-        if DESTRUCTIVE.contains(&basename) { return true; }
-        if basename == "git" {
-            let next = tokens.next().unwrap_or("");
-            if matches!(next, "rm" | "mv" | "clean" | "reset" | "checkout") {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Cap shell output so a single `<tool>cat huge.json</tool>` cannot blow the
-/// model's context window. 500 lines OR 32KB, whichever is hit first; suffix
-/// tells the model how to fetch the rest.
-fn truncate_output(out: &str) -> String {
-    const MAX_LINES: usize = 500;
-    const MAX_BYTES: usize = 32 * 1024;
-
-    let total_bytes = out.len();
-    let total_lines = out.lines().count();
-    if total_lines <= MAX_LINES && total_bytes <= MAX_BYTES {
-        return out.to_string();
-    }
-
-    // pick the tighter of the two cuts, then back off to a char boundary
-    let line_cut: usize = out.split_inclusive('\n').take(MAX_LINES).map(str::len).sum();
-    let mut cut = line_cut.min(MAX_BYTES).min(total_bytes);
-    while cut > 0 && !out.is_char_boundary(cut) { cut -= 1; }
-
-    let head = &out[..cut];
-    let extra_lines = total_lines.saturating_sub(head.lines().count());
-    let extra_bytes = total_bytes - cut;
-    format!(
-        "{head}\n[... truncated: {extra_lines} more lines, {extra_bytes} more bytes — pipe to head/sed or use read_file with offset]"
-    )
-}
-
-/// Executes a command via `sh -c` so the full shell syntax is supported:
-/// quotes, spaces, redirections, pipes, etc.
-/// `command` may include fixed flags (e.g. "grep -rn").
-/// `args` are appended after the fixed command string.
-/// Runs with `working_dir` as the current directory.
-fn execute_command(command: &str, args: &str, working_dir: &Path) -> String {
-    if command.is_empty() {
-        return "error: empty command".to_string();
-    }
-    let full = if args.is_empty() {
-        command.to_string()
-    } else {
-        format!("{command} {args}")
-    };
-
-    match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&full)
-        .current_dir(working_dir)
-        .output()
-    {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            if !out.status.success() {
-                let msg = if !stderr.is_empty() { stderr } else { stdout };
-                truncate_output(&format!("error: {msg}"))
-            } else if stdout.is_empty() {
-                "Done.".to_string()
-            } else {
-                truncate_output(&stdout)
-            }
-        }
-        Err(e) => format!("error: {e}"),
-    }
-}
-
 // ── path completion ───────────────────────────────────────────────────────────
 
 /// Returns sorted completion candidates for a partial path typed after `@`.
@@ -3423,24 +2944,6 @@ fn get_path_completions(partial: &str, working_dir: &Path) -> Vec<String> {
 }
 
 // ── pinned file helpers ───────────────────────────────────────────────────────
-
-/// Generate a unified diff between two content strings using the `diff` command.
-fn file_diff(old: &str, new: &str, label: &str) -> String {
-    let dir = std::env::temp_dir();
-    let old_path = dir.join("cognilite_pin_old.txt");
-    let new_path = dir.join("cognilite_pin_new.txt");
-    let _ = std::fs::write(&old_path, old);
-    let _ = std::fs::write(&new_path, new);
-    let out = std::process::Command::new("diff")
-        .args(["-u", "--label", &format!("a/{label}"), "--label", &format!("b/{label}")])
-        .arg(&old_path).arg(&new_path).output();
-    let _ = std::fs::remove_file(&old_path);
-    let _ = std::fs::remove_file(&new_path);
-    match out {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-        Err(_) => String::new(),
-    }
-}
 
 /// Returns the entries for a single directory level: optionally a Parent entry,
 /// then subdirectories, then text files — all sorted alphabetically.
@@ -3735,56 +3238,6 @@ pub fn resolve_attachments(
     (display, llm_content, attachments, images)
 }
 
-/// Detects `<ask>`, `<ask type="confirm">`, `<ask type="choice">` tags in content,
-/// skipping anything inside `<think>` blocks. Returns (kind, question).
-pub fn extract_ask_tag(content: &str) -> Option<(AskKind, String)> {
-    let scan = match content.rfind("</think>") {
-        Some(i) => &content[i + 8..],
-        None => {
-            if content.contains("<think>") { return None; }
-            content
-        }
-    };
-    let open = scan.find("<ask")?;
-    if is_in_code_block(scan, open) { return None; }
-    let tag_close = scan[open..].find('>')?;
-    let inner_start = open + tag_close + 1;
-    let close = scan.find("</ask>")?;
-    if close < inner_start { return None; }
-
-    let tag_str = &scan[open..open + tag_close + 1];
-    let inner = scan[inner_start..close].trim();
-
-    if tag_str.contains("type=\"confirm\"") {
-        Some((AskKind::Confirm, inner.to_string()))
-    } else if tag_str.contains("type=\"choice\"") {
-        let options: Vec<String> = inner.split('|')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if options.is_empty() { return None; }
-        Some((AskKind::Choice(options), String::new()))
-    } else {
-        Some((AskKind::Text, inner.to_string()))
-    }
-}
-
-/// Detects a complete `<patch>...</patch>` tag outside think blocks. Returns the raw diff content.
-pub fn extract_patch_tag(content: &str) -> Option<String> {
-    let scan = match content.rfind("</think>") {
-        Some(i) => &content[i + 8..],
-        None => {
-            if content.contains("<think>") { return None; }
-            content
-        }
-    };
-    let tag_pos = scan.find("<patch>")?;
-    if is_in_code_block(scan, tag_pos) { return None; }
-    let start = tag_pos + 7;
-    let end   = scan.find("</patch>")?;
-    if end >= start { Some(scan[start..end].to_string()) } else { None }
-}
-
 /// Applies a unified diff using `patch -p1` in the given working directory.
 fn apply_patch(diff: &str, working_dir: &std::path::Path) -> String {
     let tmp = std::env::temp_dir().join("cognilite_patch.diff");
@@ -3816,56 +3269,6 @@ fn apply_patch(diff: &str, working_dir: &std::path::Path) -> String {
     }
 }
 
-/// Detects a complete `<mood>...</mood>` tag outside think blocks. Returns the emoji string.
-/// Extract path from `<preview path="..."/>` tag (outside think blocks).
-pub fn extract_preview_tag(content: &str) -> Option<String> {
-    let scan = match content.rfind("</think>") {
-        Some(i) => &content[i + 8..],
-        None => {
-            if content.contains("<think>") { return None; }
-            content
-        }
-    };
-    let start = scan.find("<preview")?;
-    if is_in_code_block(scan, start) { return None; }
-    let tag_str = &scan[start..];
-    let end = tag_str.find("/>")?;
-    let inner = &tag_str[8..end]; // skip "<preview"
-    let path_start = inner.find("path=\"")? + 6;
-    let path_end = inner[path_start..].find('"')? + path_start;
-    Some(inner[path_start..path_end].to_string())
-}
-
-pub fn extract_mood_tag(content: &str) -> Option<String> {
-    let scan = match content.rfind("</think>") {
-        Some(i) => &content[i + 8..],
-        None => {
-            if content.contains("<think>") { return None; }
-            content
-        }
-    };
-    let tag_pos = scan.find("<mood>")?;
-    if is_in_code_block(scan, tag_pos) { return None; }
-    let start = tag_pos + 6;
-    let end   = scan.find("</mood>")?;
-    if end >= start { Some(scan[start..end].trim().to_string()) } else { None }
-}
-
-pub fn extract_load_neuron_tag(content: &str) -> Option<String> {
-    let scan = match content.rfind("</think>") {
-        Some(i) => &content[i + 8..],
-        None => {
-            if content.contains("<think>") { return None; }
-            content
-        }
-    };
-    let tag_pos = scan.find("<load_neuron>")?;
-    if is_in_code_block(scan, tag_pos) { return None; }
-    let start = tag_pos + 13;
-    let end   = scan.find("</load_neuron>")?;
-    if end >= start { Some(scan[start..end].trim().to_string()) } else { None }
-}
-
 pub fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
@@ -3880,208 +3283,6 @@ pub fn base64_encode(data: &[u8]) -> String {
         out.push(if chunk.len() > 2 { CHARS[n & 63] as char } else { '=' });
     }
     out
-}
-
-// ── Runtime mode ──────────────────────────────────────────────────────────
-
-pub enum RuntimeMode {
-    Tui,
-    Headless,
-    Server    { auto_yes: bool },
-    WebSocket { auto_yes: bool },
-    /// WebSocket session where the client is the cognilite TUI (--remote mode).
-    /// Has identical UI capabilities to the local TUI.
-    RemoteTui { auto_yes: bool },
-}
-
-pub fn build_runtime_context(model: &str, ctx_len: Option<u64>, mode: RuntimeMode) -> String {
-    let ctx_str = ctx_len
-        .map(|n| format!("{}k", n / 1024))
-        .unwrap_or_else(|| "unknown".to_string());
-    match mode {
-        RuntimeMode::Tui => format!(
-            "## Runtime context\n\nMode: **interactive TUI** · Model: `{model}` · Context window: {ctx_str}\n\n\
-             The user is typing in the terminal UI. All features are available:\n\
-             - `<ask>` pauses the stream and shows an interactive widget — text input, yes/no, or choice list.\n\
-             - `<patch>` renders a colored diff and asks the user to confirm before applying.\n\
-             - The file panel on the right shows the currently open file (if any).\n\
-             - Pinned files are injected into every request and tracked for changes.\n\
-             - The user can switch models and toggle neurons from the settings screen.\n\
-             - Thinking blocks are rendered in a muted color with a 'thought for Xs' label."
-        ),
-        RuntimeMode::Headless => format!(
-            "## Runtime context\n\nMode: **headless** (CLI) · Model: `{model}` · Context window: {ctx_str}\n\n\
-             Running non-interactively from the shell. Responds once and exits. \
-             `<ask>` reads from stdin — use it only when operator input is genuinely required."
-        ),
-        RuntimeMode::Server { auto_yes } => {
-            let note = if auto_yes {
-                "All confirmations are auto-accepted (`--yes` is active)."
-            } else {
-                "`<ask>` prompts go to the server operator's terminal, not the remote client."
-            };
-            format!(
-                "## Runtime context\n\nMode: **server** (HTTP POST /chat) · Model: `{model}` · Context window: {ctx_str}\n\n\
-                 The remote client receives your response as a plain-text stream. \
-                 Avoid `<ask>` when possible — the client cannot send mid-stream input. \
-                 Use tools to gather missing information instead of asking. {note}"
-            )
-        }
-        RuntimeMode::WebSocket { auto_yes } => {
-            let note = if auto_yes {
-                "All confirmations are auto-accepted (`--yes` is active)."
-            } else {
-                "`<ask>` prompts are sent to the client as structured frames — the client responds and the conversation continues. \
-                 `<patch>` diffs are shown to the client for confirmation before being applied."
-            };
-            format!(
-                "## Runtime context\n\nMode: **WebSocket session** · Model: `{model}` · Context window: {ctx_str}\n\n\
-                 The client is connected via WebSocket for a full multi-turn conversation. \
-                 You have the same capabilities as the interactive TUI: tool execution, `<ask>`, `<patch>`, \
-                 pinned files, and streaming. {note}"
-            )
-        }
-        RuntimeMode::RemoteTui { auto_yes } => {
-            let note = if auto_yes {
-                "All confirmations are auto-accepted (`--yes` is active)."
-            } else {
-                ""
-            };
-            format!(
-                "## Runtime context\n\nMode: **remote TUI** (WebSocket) · Model: `{model}` · Context window: {ctx_str}\n\n\
-                 The user is running the cognilite terminal UI on a remote machine, connected via WebSocket. \
-                 The client renders the full TUI — all interactive features work exactly as in local mode:\n\
-                 - `<ask>` pauses the stream and shows an interactive widget — text input, yes/no, or choice list.\n\
-                 - `<patch>` renders a colored diff and asks the user to confirm before applying on this server.\n\
-                 - Tool results (`<tool>`) are displayed as styled bubbles in the chat.\n\
-                 - Thinking blocks are rendered in a muted color with a 'thought for Xs' label.\n\
-                 - Pinned files are tracked and changes are sent as diffs on each turn.\n\
-                 Use all features freely — the client handles them identically to the local TUI. {note}"
-            )
-        }
-    }
-}
-
-// ── Raw continuation prompt (opt B: /api/generate with raw:true) ──────────────
-//
-// After a tool call, the assistant turn is mid-generation. Sending the history
-// back through /api/chat makes Ollama re-apply the chat template, which closes
-// the assistant turn — the model sees "I already answered" and stops.
-//
-// We build the prompt manually here, using the model's own template format,
-// and leave the last assistant turn OPEN (no closing token). Ollama then
-// continues generating from that point — no re-applied template, no new turn.
-
-#[derive(Debug, Clone, Copy)]
-pub enum TemplateFormat {
-    ChatML, // qwen, deepseek, nemotron, most recent reasoning models
-    Llama3, // llama 3.x
-    Gemma,  // gemma 2/3 (role=model)
-}
-
-/// Detect format from the Go template string returned by /api/show.
-/// Unknown formats return None; callers must fall back to /api/chat.
-pub fn detect_template_format(template: &str) -> Option<TemplateFormat> {
-    if template.contains("<|im_start|>") {
-        Some(TemplateFormat::ChatML)
-    } else if template.contains("<|start_header_id|>") {
-        Some(TemplateFormat::Llama3)
-    } else if template.contains("<start_of_turn>") {
-        Some(TemplateFormat::Gemma)
-    } else {
-        None
-    }
-}
-
-/// Build a raw prompt string for /api/generate with raw:true.
-///
-/// `history` carries API-shaped (role, content) pairs — roles are "user" /
-/// "assistant" / "system" (the system slot is handled separately).
-///
-/// If the last message is an assistant, we leave its turn OPEN (no closing
-/// token, no new assistant header). Ollama continues generating right where
-/// it left off. Otherwise, we close all previous turns and open a fresh
-/// assistant turn.
-pub fn build_raw_prompt(
-    fmt: TemplateFormat,
-    system: Option<&str>,
-    history: &[(String, String)],
-) -> String {
-    let mut s = String::new();
-    let last_is_assistant = history.last().is_some_and(|(r, _)| r == "assistant");
-
-    match fmt {
-        TemplateFormat::ChatML => {
-            if let Some(sys) = system {
-                s.push_str(&format!("<|im_start|>system\n{sys}<|im_end|>\n"));
-            }
-            for (i, (role, content)) in history.iter().enumerate() {
-                let is_last = i + 1 == history.len();
-                if is_last && last_is_assistant {
-                    s.push_str(&format!("<|im_start|>assistant\n{content}"));
-                } else {
-                    s.push_str(&format!("<|im_start|>{role}\n{content}<|im_end|>\n"));
-                }
-            }
-            if !last_is_assistant {
-                s.push_str("<|im_start|>assistant\n");
-            }
-        }
-        TemplateFormat::Llama3 => {
-            s.push_str("<|begin_of_text|>");
-            if let Some(sys) = system {
-                s.push_str(&format!(
-                    "<|start_header_id|>system<|end_header_id|>\n\n{sys}<|eot_id|>"
-                ));
-            }
-            for (i, (role, content)) in history.iter().enumerate() {
-                let is_last = i + 1 == history.len();
-                if is_last && last_is_assistant {
-                    s.push_str(&format!(
-                        "<|start_header_id|>assistant<|end_header_id|>\n\n{content}"
-                    ));
-                } else {
-                    s.push_str(&format!(
-                        "<|start_header_id|>{role}<|end_header_id|>\n\n{content}<|eot_id|>"
-                    ));
-                }
-            }
-            if !last_is_assistant {
-                s.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
-            }
-        }
-        TemplateFormat::Gemma => {
-            // Gemma has no native system role; prepend it to the first user turn
-            // if present. Assistant role is emitted as "model".
-            let mut system_consumed = system.is_none();
-            for (i, (role, content)) in history.iter().enumerate() {
-                let is_last = i + 1 == history.len();
-                let g_role = if role == "assistant" { "model" } else { "user" };
-                let body = if !system_consumed && role == "user" {
-                    system_consumed = true;
-                    format!("{}\n\n{}", system.unwrap(), content)
-                } else {
-                    content.clone()
-                };
-                if is_last && last_is_assistant {
-                    s.push_str(&format!("<start_of_turn>model\n{body}"));
-                } else {
-                    s.push_str(&format!("<start_of_turn>{g_role}\n{body}<end_of_turn>\n"));
-                }
-            }
-            // If no user turn carried the system, prepend it as a bare user turn.
-            if !system_consumed {
-                let sys = system.unwrap_or("");
-                let mut head = format!("<start_of_turn>user\n{sys}<end_of_turn>\n");
-                head.push_str(&s);
-                s = head;
-            }
-            if !last_is_assistant {
-                s.push_str("<start_of_turn>model\n");
-            }
-        }
-    }
-    s
 }
 
 impl App {

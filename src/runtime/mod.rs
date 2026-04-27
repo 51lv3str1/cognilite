@@ -1,2 +1,5 @@
-// Runtime — orchestration layer (App struct, polling, state machine).
-// During sub-fase A this is empty; app.rs is moved here in sub-fase B.
+// Runtime — orchestration layer. Methods on `App` are split here by feature
+// area; the struct itself still lives in app.rs during sub-fase B.
+
+pub mod pinned;
+pub mod tools;

@@ -147,17 +147,11 @@ Aquí es donde un modelo deja de necesitar una persona sosteniendo el hilo de la
 - **Esfuerzo:** ~30 min
 - **Estado actual:** los templates fueron borrados en `git status` — restaurarlos o reescribirlos desde cero apuntando a `Architect`.
 
-### 3.3 Tool builtin `tree`
-- **Archivo:** `src/adapter/tools_native.rs`
-- **Esfuerzo:** ~1 hora
-- **Firma:** `tree [path] [--depth N]`, respeta `.gitignore` si `fd` está disponible, fallback `find -maxdepth N`.
-- **Output:** árbol jerárquico con LOC por archivo `.rs/.ts/.py/.go`.
+### ~~3.3 Tool builtin `tree`~~ ✅ done 2026-04-27
+- **Implementado en `adapter/tools_native.rs`:** `pub fn tree(args, working_dir)`. Usa `fd --max-depth N --type f` si está disponible (respeta `.gitignore`); fallback a `find` con excludes hard-coded (target/.git/node_modules/.venv). Output: árbol indentado por dir con LOC para archivos `.rs/.ts/.py/.go/.rb/.java/.c/.cpp/.h/.swift/.kt/.scala`. Cap inline a 32KB. Registrado como built-in en `runtime/tools.rs::execute_tool_call` (bypass del destructive-shell gate).
 
-### 3.4 Auto-inject `<project_map>` en `runtime_context`
-- **Archivo:** `src/domain/prompt.rs::build_runtime_context`
-- **Esfuerzo:** ~1 hora
-- **Cambio:** si el `working_dir` tiene `Cargo.toml`/`package.json`/`pyproject.toml`/`go.mod`, ejecutar el tool `tree` interno y embeber el resultado en el system prompt como `<project_map>...</project_map>`.
-- **Beneficio:** el modelo arranca orientado, sin gastar 2-3 turnos en `glob_files`.
+### ~~3.4 Auto-inject `<project_map>` en `runtime_context`~~ ✅ done 2026-04-27
+- **Implementado:** `build_project_map(working_dir)` en `adapter/tools_native.rs` detecta marcadores (`Cargo.toml`/`package.json`/`pyproject.toml`/`go.mod`/`deno.json`/`Gemfile`/`build.gradle`/`pom.xml`) y emite `<project_map>\n{tree}\n</project_map>`. Firma de `build_runtime_context` extendida con `project_map: Option<&str>`. Los 3 callers (`app.rs::select_model`, `headless_runner.rs::run`, `ws_server.rs::run_session`) ahora calculan el map y lo pasan. Test `runtime_context_appends_project_map_when_present` agregado.
 
 ### 3.5 Tag `<finding>` de primera clase
 - **Archivos:** `src/domain/tags.rs` (extractor) + `src/app.rs::poll_stream` (acumulador)

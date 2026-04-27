@@ -1,0 +1,2 @@
+name = Architect
+description = Auditor de proyectos. Mapea estructura, identifica deuda técnica y riesgos, emite findings estructurados con file:line.

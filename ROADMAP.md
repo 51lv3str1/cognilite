@@ -124,28 +124,11 @@ Las neuronas hoy gastan tokens en prosa que no se enforce.
 
 Aquí es donde un modelo deja de necesitar una persona sosteniendo el hilo de la revisión.
 
-### 3.1 Neuron `Architect`
-- **Path:** `.cognilite/neurons/architect/`
-- **Esfuerzo:** ~1 hora
-- **Contenido (versión densa):**
-  ```markdown
-  # Architect
+### ~~3.1 Neuron `Architect`~~ ✅ done 2026-04-27
+- **Creado:** `.cognilite/neurons/architect/neuron.toml` + `thoughts/Architect.md`. Define protocolo (mapear → manifests → top-N por LOC → findings con `file:line` → resumen ejecutivo), categorías de finding (security/tech-debt/bug/perf/style), restricciones (solo lectura, no inventar líneas, sin bullets vacíos), y un ejemplo concreto.
 
-  ## Qué hago
-  Audito proyectos: estructura, deuda técnica, riesgos de seguridad, mejoras concretas.
-
-  ## Protocolo
-  1. <tool>tree</tool> para mapa
-  2. read Cargo.toml/package.json/pyproject.toml
-  3. read archivos por LOC desc, top 5
-  4. emitir <finding severity="high|med|low" file="path:line">...</finding> por cada hallazgo
-  5. al final: resumen ejecutivo con top-3 deudas y top-3 features
-  ```
-
-### 3.2 Templates `/review`, `/audit`, `/refactor`
-- **Path:** `.cognilite/templates/`
-- **Esfuerzo:** ~30 min
-- **Estado actual:** los templates fueron borrados en `git status` — restaurarlos o reescribirlos desde cero apuntando a `Architect`.
+### ~~3.2 Templates `/review` y `/audit`~~ ✅ done 2026-04-27
+- **Creados:** `.cognilite/templates/review.md` (revisión arquitectónica general, dispara `<load_neuron>Architect</load_neuron>` y describe el flow) y `.cognilite/templates/audit.md` (foco en `category="security"`: comandos sin gate, secretos hardcoded, inputs sin validar, boundaries violados, deps con CVEs, races en código sync). `/refactor` queda fuera por ahora — no pedido inmediato.
 
 ### ~~3.3 Tool builtin `tree`~~ ✅ done 2026-04-27
 - **Implementado en `adapter/tools_native.rs`:** `pub fn tree(args, working_dir)`. Usa `fd --max-depth N --type f` si está disponible (respeta `.gitignore`); fallback a `find` con excludes hard-coded (target/.git/node_modules/.venv). Output: árbol indentado por dir con LOC para archivos `.rs/.ts/.py/.go/.rb/.java/.c/.cpp/.h/.swift/.kt/.scala`. Cap inline a 32KB. Registrado como built-in en `runtime/tools.rs::execute_tool_call` (bypass del destructive-shell gate).

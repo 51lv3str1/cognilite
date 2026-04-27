@@ -34,50 +34,56 @@ Cierran agujeros conocidos sin tocar arquitectura.
 
 Bajan la barrera para que un modelo navegue el código en próximas revisiones, y eliminan duplicación que dispara bugs.
 
-### 1.1 Partir `app.rs` (3988 líneas → 8 archivos)
-- **Esfuerzo:** ~3-4 horas, sin riesgo (solo `mod.rs` re-exports)
-- **Layout propuesto:**
+### 1.1 Partir `app.rs` — layout hexagonal (en lugar de `src/app/*`)
+- **Decisión:** no se usó el layout `src/app/*.rs` propuesto originalmente; en su lugar se aplicó **hexagonal/ports-and-adapters** porque cognilite tiene múltiples vistas (TUI/headless/HTTP/WS) y múltiples controllers (keyboard/HTTP/WS), no encajan en MVC clásico.
+- **Layout final:**
   ```
-  src/app/
-  ├── mod.rs          # struct App + new() + Screen + StreamState
-  ├── config.rs       # Config, load_config, save_config, NeuronMode, presets
-  ├── stream.rs       # poll_stream, start_stream, stop_stream
-  ├── tags.rs         # extract_*, strip_*, is_in_code_block
-  ├── pinned.rs       # PinnedFile, check_pinned_files, collect_pinned_diffs
-  ├── picker.rs       # FilePicker, FilePanel, file_picker_*
-  ├── input.rs        # input_* helpers (~200 líneas)
-  ├── runtime.rs      # build_runtime_context, RuntimeMode
-  └── raw_prompt.rs   # build_raw_prompt, TemplateFormat, detect_template_format
+  src/
+  ├── main.rs                # dispatch
+  ├── app.rs                 # struct App + state machine glue (~2200 LoC)
+  ├── domain/                # MODEL puro, testable sin runtime
+  │   ├── message.rs         # Role, Message, Attachment, AttachmentKind, TokenStats
+  │   ├── tags.rs            # extract_*, AskKind, InputRequest, is_in_code_block
+  │   ├── prompt.rs          # RuntimeMode, build_runtime_context, TemplateFormat, build_raw_prompt
+  │   ├── config.rs          # Config, CtxStrategy, NeuronMode, NeuronPreset, load_config
+  │   └── neuron.rs          # ex synapse.rs (Neuron, Synapse, build_tool_context)
+  ├── runtime/               # impl App por feature
+  │   ├── input.rs           # Completion, input_*, complete_*, get_path_completions
+  │   ├── picker.rs          # FilePicker, FilePanel, syntect highlighting
+  │   ├── pinned.rs          # PinnedFile, check/diff
+  │   ├── room.rs            # WS room sync
+  │   └── tools.rs           # handle_tool_call, is_destructive_shell, execute_command
+  ├── view/tui.rs            # ratatui rendering
+  └── adapter/               # I/O — ollama, ws_server, ws_client, http_server,
+                             # keyboard, headless_runner, tools_native, clipboard
   ```
-- **Beneficio para self-review:** cada archivo entra en una ventana de modelos 4-8B.
 
-### 1.2 Unificar tag extraction/stripping
-- **Archivos:** `src/app.rs:1182-1486` (poll_stream), `src/headless.rs:212-348`
-- **Esfuerzo:** ~1 hora — elimina ~250 líneas duplicadas
-- **API objetivo:**
-  ```rust
-  // tags.rs
-  pub fn extract_tag(content: &str, tag: &str) -> Option<&str>;
-  pub fn extract_self_closing(content: &str, tag: &str) -> Option<HashMap<String,String>>;
-  pub fn strip_tag(content: &mut String, tag: &str);
-  ```
-- Las funciones `extract_ask_tag`, `extract_patch_tag`, `extract_mood_tag`, `extract_preview_tag`, `extract_load_neuron_tag` colapsan a uso del helper.
-- El bloque `rfind("</think>") → find("<TAG>") → truncate` que se repite 6 veces queda como una sola función.
+### ~~1.1.A Sub-fase A: hexagonal skeleton~~ ✅ done 2026-04-27
+- **Implementado:** `mkdir src/{domain,runtime,view,adapter}`, `git mv` de los 10 archivos standalone (clipboard/ollama/tools→tools_native/server→http_server/ws_client/websocket→ws_server/events→keyboard/headless→headless_runner/synapse→neuron/ui→tui), bulk-update de imports vía sed (`crate::ollama` → `crate::adapter::ollama`, etc.), `mod.rs` por dir, aliases en main.rs (`use adapter::headless_runner as headless;`) para que call-sites no churneen. Commit `9810e14`.
 
-### 1.3 Tests de los contratos de parsing
-- **Archivo nuevo:** `src/app/tags.rs` con `#[cfg(test)] mod tests`
-- **Esfuerzo:** ~2 horas
-- **Cobertura mínima:**
-  - `extract_tool_call`: skip dentro de `<think>`, skip dentro de ` ``` ` fences, manejo de tags anidados
-  - `build_raw_prompt`: 3 formatos × `last_is_assistant` true/false × system presente/ausente
-  - `safe_print_boundary` (`headless.rs:408`): cortes en frontera de tag parcial
-  - `is_mentioned` / `extract_mentions`: `#name`, `#name#id`, `#all`, separadores
-- Estos son los contratos que rompen UX silenciosamente si cambian.
+### ~~1.1.B Sub-fase B: split de app.rs~~ ✅ done parcial 2026-04-27
+- **Implementado:** dos commits (`e9eba6a`, `a148130`).
+  - **domain/**: `message.rs` (55), `tags.rs` (137), `prompt.rs` (201), `config.rs` (124).
+  - **runtime/**: `pinned.rs` (70), `tools.rs` (234), `room.rs` (76), `input.rs` (420), `picker.rs` (572).
+- **Resultado:** app.rs **3988 → 2248 líneas (-44%)**. Build dev + release limpios.
+- **Pendiente** (lo que sigue en app.rs):
+  - **stream.rs** (~600 LoC) — `start_stream`, `poll_stream`, `stop_stream`, `poll_warmup`. El más grande, también el core del producto.
+  - **ws.rs** (~400 LoC) — `poll_ws`, `handle_ws_frame`, `poll_remote_*`, `switch_to_local`.
+  - **attachments.rs** (~150 LoC) — `resolve_attachments`, `split_at_paths`, `file_kind`, `resolve_path`.
+  - **identity.rs** (~50 LoC, en `domain/`) — `new_session_id`, `model_display_name`, `username_color`, `extract_mentions`, `is_mentioned`.
+- **Recomendación:** parar acá hasta que se valide el layout actual. app.rs a 2248 líneas ya entra en context de cualquier modelo razonable.
 
-### 1.4 Reemplazar parsing manual de config por `serde::Deserialize`
-- **Archivo:** `src/app.rs:160-207` (50 líneas de `val.get().and_then().unwrap_or()`)
-- **Esfuerzo:** ~30 min
-- **Cambio:** `#[derive(Deserialize)] struct ConfigFile` con `#[serde(default)]` por campo. Reduce a ~10 líneas y elimina inconsistencias entre `load`/`save`.
+### ~~1.2 Unificar tag extraction/stripping~~ ✅ done parcial 2026-04-27
+- **Implementado en `domain/tags.rs`:** helpers genéricos `extract_tag(content, name)` y `strip_tag(content, name)` (con `after_think()` extraído como helper privado). `extract_tool_call`/`extract_patch_tag`/`extract_mood_tag`/`extract_load_neuron_tag` colapsaron a 1-2 líneas cada uno. `extract_ask_tag` queda aparte por el parsing de `type="..."`, `extract_preview_tag` por ser self-closing — pendientes para una segunda iteración si vale la pena.
+- **Pendiente:** refactor de `app.rs::poll_stream` y `adapter/headless_runner.rs::run_stream_loop` para usar `strip_tag` en vez de inline `rfind/find/truncate` (cinco repeticiones). El helper ya está disponible; aplicarlo cuando se toque ese código.
+
+### ~~1.3 Tests de los contratos de parsing~~ ✅ done 2026-04-27
+- **23 tests passing** en `domain/tags.rs` (12) y `domain/prompt.rs` (11).
+- Cobertura: `extract_tool_call` (think skip/code fence skip/think unclosed), `extract_tag` genérico, `strip_tag` (presente/ausente), `extract_ask_tag` (text/confirm/choice), `extract_preview_tag`, `extract_mood_tag` con trim, `detect_template_format` (ChatML/Llama3/Gemma/unknown), `build_raw_prompt` (3 formatos × last_is_assistant true/false × system optional), `build_runtime_context` (TUI mode con model/ctx).
+- **Pendiente:** `safe_print_boundary` (en `adapter/headless_runner.rs`), `is_mentioned`/`extract_mentions` (siguen en `app.rs`).
+
+### ~~1.4 Reemplazar parsing manual de config por `serde::Deserialize`~~ ✅ done 2026-04-27
+- **Implementado en `domain/config.rs`:** struct interno `ConfigFile` con `#[derive(Default, Deserialize)]` y `#[serde(default)]`. `load_config` baja de ~47 líneas de `val.get().and_then().unwrap_or()` a ~22 líneas declarativas. `NeuronPreset` ahora deriva `Deserialize` directo. `flush_config` no se tocó (sigue construyendo el JSON manualmente con `serde_json::json!`); inconsistencia residual: si se agrega un campo nuevo, hay que tocar 2 lugares.
 
 ---
 
@@ -142,19 +148,19 @@ Aquí es donde un modelo deja de necesitar una persona sosteniendo el hilo de la
 - **Estado actual:** los templates fueron borrados en `git status` — restaurarlos o reescribirlos desde cero apuntando a `Architect`.
 
 ### 3.3 Tool builtin `tree`
-- **Archivo:** `src/tools.rs`
+- **Archivo:** `src/adapter/tools_native.rs`
 - **Esfuerzo:** ~1 hora
 - **Firma:** `tree [path] [--depth N]`, respeta `.gitignore` si `fd` está disponible, fallback `find -maxdepth N`.
 - **Output:** árbol jerárquico con LOC por archivo `.rs/.ts/.py/.go`.
 
 ### 3.4 Auto-inject `<project_map>` en `runtime_context`
-- **Archivo:** `src/app.rs:3785` (`build_runtime_context`)
+- **Archivo:** `src/domain/prompt.rs::build_runtime_context`
 - **Esfuerzo:** ~1 hora
 - **Cambio:** si el `working_dir` tiene `Cargo.toml`/`package.json`/`pyproject.toml`/`go.mod`, ejecutar el tool `tree` interno y embeber el resultado en el system prompt como `<project_map>...</project_map>`.
 - **Beneficio:** el modelo arranca orientado, sin gastar 2-3 turnos en `glob_files`.
 
 ### 3.5 Tag `<finding>` de primera clase
-- **Archivos:** `src/app/tags.rs` (extractor) + `src/app/stream.rs` (acumulador)
+- **Archivos:** `src/domain/tags.rs` (extractor) + `src/app.rs::poll_stream` (acumulador)
 - **Esfuerzo:** ~1-2 horas
 - **Sintaxis:**
   ```xml
@@ -166,7 +172,7 @@ Aquí es donde un modelo deja de necesitar una persona sosteniendo el hilo de la
 - **Comportamiento:** se acumulan en `app.findings: Vec<Finding>`, no se imprimen inline. Al `done` del stream, se renderizan como reporte estructurado al final del chat (TUI) o como bloque final en stdout (headless).
 
 ### 3.6 Tool `note` (memoria de trabajo)
-- **Archivo:** `src/tools.rs`
+- **Archivo:** `src/adapter/tools_native.rs`
 - **Esfuerzo:** ~1 hora
 - **Firma:** `note add "..."`, `note list`, `note clear`. Persiste a `/tmp/cognilite-notes-<session>.md`.
 - **Integración:** las notas se inyectan al final del `full_system_prompt` en cada turno (igual que pinned files).

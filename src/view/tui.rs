@@ -349,7 +349,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
         }
         _ => {
             // ── Features (Generation + Performance) ───────────────────────────
-            // cursor 0-2 = gen params, 3-5 = perf flags, 6 = thinking
+            // cursor 0..=3 = gen params (GEN_PARAMS), 4..=6 = perf toggles, 7 = thinking
             struct Toggle<'a> { label: &'a str, desc: &'a str, value: bool }
             let toggles = [
                 Toggle { label: "Stable num_ctx",   desc: "Round context window to powers of 2 to preserve KV cache", value: app.ctx_pow2   },
@@ -402,7 +402,7 @@ fn draw_config(frame: &mut Frame, app: &App) {
                 )), Rect { x: inner.x, y, width: inner.width, height: 1 });
                 y += 1;
                 for (ti, opt) in toggles.iter().enumerate() {
-                    let feature_idx = 3 + ti;
+                    let feature_idx = crate::app::GEN_PARAMS.len() + ti;
                     if !crate::app::fuzzy_match(&app.config_search, opt.label) { continue; }
                     let cursor = feature_idx == app.features_cursor;
                     let (marker, circle_fg) = if opt.value { ("●", ACCENT) } else { ("○", DIM) };

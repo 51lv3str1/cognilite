@@ -244,9 +244,9 @@ fn handle_config(app: &mut App, key: KeyEvent) {
         }
     } else {
         // ── Features (Generation + Performance) ───────────────────────────────
-        // cursor 0-2 = gen params, 3-5 = perf flags, 6 = thinking
+        // cursor 0..=3 = gen params (GEN_PARAMS), 4..=6 = perf toggles, 7 = thinking
         const FEATURE_ITEMS: &[&str] = &[
-            "temperature", "top_p", "repeat_penalty",
+            "temperature", "top_p", "repeat_penalty", "thinking_budget",
             "Stable num_ctx", "Keep model alive", "Warm-up cache", "Thinking",
         ];
         let filtered: Vec<usize> = FEATURE_ITEMS.iter().enumerate()

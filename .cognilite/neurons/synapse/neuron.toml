@@ -1,2 +1,2 @@
 name = Synapse
-description = Tool call protocol
+description =  Handles raw shell command execution within the Cognilite TUI.

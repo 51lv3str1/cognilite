@@ -1,3 +1,0 @@
-name = Gyrus
-description = Git operations — load when the user asks about commits, history, diffs, or branches
-tooling = true

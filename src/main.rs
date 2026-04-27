@@ -1,19 +1,21 @@
 mod app;
-mod clipboard;
-mod tools;
-mod headless;
-mod server;
-mod websocket;
-mod ws_client;
-mod synapse;
-mod events;
-mod ollama;
-mod ui;
+mod adapter;
+mod domain;
+mod runtime;
+mod view;
 
 use std::time::Duration;
 use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use color_eyre::Result;
 use app::App;
+use adapter::{
+    headless_runner as headless,
+    http_server as server,
+    keyboard as events,
+    ollama,
+    ws_client,
+};
+use view::tui as ui;
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 pub const DEFAULT_SERVER_HOST: &str = "0.0.0.0";
@@ -57,7 +59,7 @@ fn main() -> Result<()> {
     }
 
     if let Some((host, port, thinking)) = parse_server_args(&argv) {
-        server::run(&ollama_url, &host, port, thinking, crate::websocket::new_room_registry(), false);
+        server::run(&ollama_url, &host, port, thinking, crate::adapter::ws_server::new_room_registry(), false);
         return Ok(());
     }
 
@@ -93,10 +95,10 @@ fn main() -> Result<()> {
         App::prewarm_highlight();
 
         // start embedded WS server so others can join the local chat
-        let rooms = crate::websocket::new_room_registry();
+        let rooms = crate::adapter::ws_server::new_room_registry();
         if let Some(ref room_id) = app.room_id.clone() {
             use std::sync::{Arc, Mutex};
-            let room: crate::websocket::SharedRoom = Arc::new(Mutex::new(crate::websocket::RoomState {
+            let room: crate::adapter::ws_server::SharedRoom = Arc::new(Mutex::new(crate::adapter::ws_server::RoomState {
                 messages: vec![], version: 0,
                 live_tokens: String::new(), live_token_version: 0, live_user: String::new(),
                 active_session_ids: std::collections::HashSet::new(),
@@ -351,6 +353,7 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> color_eyr
         }
 
         if app.should_quit {
+            app.flush_config();
             break;
         }
     }

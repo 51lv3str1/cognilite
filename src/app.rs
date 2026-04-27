@@ -7,7 +7,7 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
-use crate::ollama::{ChatMessage, ModelEntry, StreamChunk};
+use crate::adapter::ollama::{ChatMessage, ModelEntry, StreamChunk};
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static THEME_SET: OnceLock<ThemeSet>   = OnceLock::new();
@@ -75,6 +75,9 @@ pub struct NeuronPreset {
 pub struct Config {
     pub ctx_strategy: CtxStrategy,
     pub disabled_neurons: std::collections::HashSet<String>,
+    // Smart mode: neurons that start unloaded and are pulled in via <load_neuron>.
+    // Any enabled neuron NOT in this set is included in the initial system prompt.
+    pub on_demand_neurons: std::collections::HashSet<String>,
     pub gen_params: [f64; 4],
     pub ctx_pow2: bool,
     pub keep_alive: bool,
@@ -156,7 +159,9 @@ pub fn is_mentioned(display_username: &str, content: &str) -> bool {
 
 pub fn load_config() -> Config {
     let default = Config {
-        ctx_strategy: CtxStrategy::Dynamic, disabled_neurons: Default::default(),
+        ctx_strategy: CtxStrategy::Dynamic,
+        disabled_neurons: Default::default(),
+        on_demand_neurons: Default::default(),
         gen_params: [GEN_PARAMS[0].2, GEN_PARAMS[1].2, GEN_PARAMS[2].2, GEN_PARAMS[3].2],
         ctx_pow2: true, keep_alive: false, warmup: true, thinking: true,
         neuron_mode: NeuronMode::Manual, neuron_presets: Vec::new(), active_preset: None,
@@ -168,6 +173,10 @@ pub fn load_config() -> Config {
     let ctx_strategy = val.get("ctx_strategy")
         .and_then(|v| v.as_str()).map(CtxStrategy::from_str).unwrap_or(CtxStrategy::Dynamic);
     let disabled_neurons = val.get("disabled_neurons")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let on_demand_neurons = val.get("on_demand_neurons")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
@@ -194,12 +203,7 @@ pub fn load_config() -> Config {
     let active_preset = val.get("active_preset").and_then(|v| v.as_str()).map(String::from);
     let username = val.get("username").and_then(|v| v.as_str())
         .filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(default_username);
-    Config { ctx_strategy, disabled_neurons, gen_params, ctx_pow2, keep_alive, warmup, thinking, neuron_mode, neuron_presets, active_preset, username }
-}
-
-/// Returns true if the neuron has active tool capabilities (shell passthrough or synapse tools).
-pub fn neuron_is_tooling(n: &crate::synapse::Neuron) -> bool {
-    n.shell || !n.synapses.is_empty() || n.tooling
+    Config { ctx_strategy, disabled_neurons, on_demand_neurons, gen_params, ctx_pow2, keep_alive, warmup, thinking, neuron_mode, neuron_presets, active_preset, username }
 }
 
 pub fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -362,6 +366,8 @@ pub struct App {
     pub preset_cursor: usize,
     pub preset_name_input: Option<String>, // Some(s) while creating a new preset
     pub disabled_neurons: std::collections::HashSet<String>,
+    // Smart mode: neurons deferred to <load_neuron> (not in initial system prompt).
+    pub on_demand_neurons: std::collections::HashSet<String>,
     pub ctx_pow2: bool,
     pub keep_alive: bool,
     pub warmup: bool,
@@ -377,6 +383,10 @@ pub struct App {
     // chat
     pub selected_model: Option<String>,
     pub context_length: Option<u64>,
+    // Raw Go template string from /api/show — used to detect the model's
+    // chat format (ChatML / Llama-3 / Gemma) when we need to build a raw
+    // continuation prompt after a tool call.
+    pub model_template: Option<String>,
     pub used_tokens: u64,
     pub messages: Vec<Message>,
     pub input: String,
@@ -395,7 +405,7 @@ pub struct App {
     pub thinking_end_secs: Option<f64>, // captured when first content token arrives
     pub completion: Option<Completion>,
     // neurons (groups of synapses)
-    pub neurons: Vec<crate::synapse::Neuron>,
+    pub neurons: Vec<crate::domain::neuron::Neuron>,
     // prompt templates (name, body) loaded from .cognilite/templates/ and global dir
     pub templates: Vec<(String, String)>,
     // input history
@@ -425,6 +435,8 @@ pub struct App {
     pub room_live: Option<(String, String)>,
     // pending patch waiting for user confirmation
     pub pending_patch: Option<String>,
+    // pending shell tool call awaiting destructive-confirm
+    pub pending_tool_call: Option<String>,
     // pinned files (always in system prompt)
     pub pinned_files: Vec<PinnedFile>,
     pub file_picker: Option<FilePicker>,
@@ -438,26 +450,29 @@ pub struct App {
     pub injected_neurons: std::collections::HashSet<String>,
     // remote WebSocket client connection (--remote mode)
     pub ws_tx: Option<std::net::TcpStream>,
-    pub ws_rx: Option<mpsc::Receiver<crate::ws_client::WsClientFrame>>,
+    pub ws_rx: Option<mpsc::Receiver<crate::adapter::ws_client::WsClientFrame>>,
     // background model fetch triggered by switch_to_local()
-    pub local_models_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
+    pub local_models_rx: Option<mpsc::Receiver<Result<Vec<crate::adapter::ollama::ModelEntry>, String>>>,
     // remote connect screen state
     pub remote_url: String,
     pub remote_url_cursor: usize,
     pub remote_connecting: bool,
     pub remote_connect_error: Option<String>,
-    pub remote_connect_rx: Option<mpsc::Receiver<Result<(std::net::TcpStream, mpsc::Receiver<crate::ws_client::WsClientFrame>), String>>>,
-    pub remote_ollama_rx: Option<mpsc::Receiver<Result<Vec<crate::ollama::ModelEntry>, String>>>,
+    pub remote_connect_rx: Option<mpsc::Receiver<Result<(std::net::TcpStream, mpsc::Receiver<crate::adapter::ws_client::WsClientFrame>), String>>>,
+    pub remote_ollama_rx: Option<mpsc::Receiver<Result<Vec<crate::adapter::ollama::ModelEntry>, String>>>,
     pub remote_label: Option<String>, // shown in title bar when connected remotely
     pub username: String,
     pub session_id: String,      // unique ID for the MODEL participant in this session
     pub user_session_id: String, // unique ID for the HUMAN participant in this session
     pub room_id: Option<String>,      // UUID of the current WS room
-    pub shared_room: Option<crate::websocket::SharedRoom>, // shared room state (local server)
+    pub shared_room: Option<crate::adapter::ws_server::SharedRoom>, // shared room state (local server)
     pub room_synced_len: usize,       // how many room messages we've already pulled into app.messages
     pub join_room_input: Option<String>, // Some = join-room dialog open
     pub username_editing: bool,       // true while editing username in settings
     pub show_room_share: bool,        // show room share popup in chat
+    // dirty flag: true when in-memory config differs from disk; flushed on
+    // screen transitions and quit, not on every keystroke.
+    pub config_dirty: bool,
 }
 
 impl App {
@@ -480,6 +495,7 @@ impl App {
             preset_cursor: 0,
             preset_name_input: None,
             disabled_neurons: cfg.disabled_neurons,
+            on_demand_neurons: cfg.on_demand_neurons,
             ctx_pow2: cfg.ctx_pow2,
             keep_alive: cfg.keep_alive,
             warmup: cfg.warmup,
@@ -493,6 +509,7 @@ impl App {
             models_error: None,
             selected_model: None,
             context_length: None,
+            model_template: None,
             used_tokens: 0,
             messages: Vec::new(),
             input: String::new(),
@@ -515,11 +532,11 @@ impl App {
                 let local = std::env::current_dir()
                     .unwrap_or_else(|_| std::path::PathBuf::from("."))
                     .join(".cognilite/neurons");
-                n.extend(crate::synapse::load_from_dir(&local));
+                n.extend(crate::domain::neuron::load_from_dir(&local));
                 if let Ok(home) = std::env::var("HOME") {
                     let global = std::path::PathBuf::from(home)
                         .join(".config/cognilite/neurons");
-                    n.extend(crate::synapse::load_from_dir(&global));
+                    n.extend(crate::domain::neuron::load_from_dir(&global));
                 }
                 n
             },
@@ -555,6 +572,7 @@ impl App {
             current_mood: None,
             room_live: None,
             pending_patch: None,
+            pending_tool_call: None,
             pinned_files: Vec::new(),
             file_picker: None,
             file_panel: None,
@@ -575,12 +593,13 @@ impl App {
             username: cfg.username,
             session_id: new_session_id(),
             user_session_id: new_session_id(),
-            room_id: Some(crate::websocket::new_uuid()),
+            room_id: Some(crate::adapter::ws_server::new_uuid()),
             shared_room: None,
             room_synced_len: 0,
             join_room_input: None,
             username_editing: false,
             show_room_share: false,
+            config_dirty: false,
         }
     }
 
@@ -593,16 +612,28 @@ impl App {
         });
     }
 
-    fn save_config(&self) {
+    /// Mark the in-memory config as dirty. The actual disk write happens at
+    /// `flush_config()` time — invoked on screen transitions and quit so we
+    /// don't re-serialize JSON on every arrow-key in a slider.
+    fn save_config(&mut self) {
+        self.config_dirty = true;
+    }
+
+    /// Persist the in-memory config to disk if dirty. Idempotent.
+    pub fn flush_config(&mut self) {
+        if !self.config_dirty { return; }
+        self.config_dirty = false;
         let Some(path) = config_path() else { return };
         if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
         let disabled: Vec<&str> = self.disabled_neurons.iter().map(String::as_str).collect();
+        let on_demand: Vec<&str> = self.on_demand_neurons.iter().map(String::as_str).collect();
         let presets: Vec<serde_json::Value> = self.neuron_presets.iter().map(|p| {
             serde_json::json!({ "name": p.name, "enabled": p.enabled })
         }).collect();
         let json = serde_json::json!({
             "ctx_strategy":    self.ctx_strategy.as_str(),
             "disabled_neurons": disabled,
+            "on_demand_neurons": on_demand,
             "temperature":      self.gen_params[0],
             "top_p":            self.gen_params[1],
             "repeat_penalty":   self.gen_params[2],
@@ -622,6 +653,7 @@ impl App {
     pub fn confirm_config(&mut self) {
         self.ctx_strategy = CtxStrategy::from_index(self.config_cursor);
         self.save_config();
+        self.flush_config();
     }
 
     pub fn room_share_url(&self) -> Option<String> {
@@ -649,6 +681,7 @@ impl App {
         if !name.is_empty() { self.username = name; }
         self.username_editing = false;
         self.save_config();
+        self.flush_config();
     }
 
     /// Push a live token to the shared room so WS clients can stream it in real time.
@@ -739,6 +772,30 @@ impl App {
         }
     }
 
+    /// Smart mode three-state cycle per neuron:
+    ///   disabled → enabled as initial → enabled as on-demand → disabled.
+    pub fn cycle_neuron_smart_state(&mut self) {
+        let Some(neuron) = self.neurons.get(self.neuron_cursor) else { return };
+        let name = neuron.name.clone();
+        let disabled = self.disabled_neurons.contains(&name);
+        let on_demand = self.on_demand_neurons.contains(&name);
+        if disabled {
+            // disabled → initial
+            self.disabled_neurons.remove(&name);
+            self.on_demand_neurons.remove(&name);
+        } else if !on_demand {
+            // initial → on-demand
+            self.on_demand_neurons.insert(name);
+        } else {
+            // on-demand → disabled
+            self.on_demand_neurons.remove(&name);
+            self.disabled_neurons.insert(name);
+        }
+        self.save_config();
+        self.warmup_last_hash = None;
+        self.trigger_warmup();
+    }
+
     pub fn param_adjust(&mut self, direction: f64) {
         let (_, _, _, min, max, step) = GEN_PARAMS[self.param_cursor];
         let v = &mut self.gen_params[self.param_cursor];
@@ -821,7 +878,7 @@ impl App {
     pub fn toggle_config(&mut self) {
         self.show_help = false;
         self.screen = match self.screen {
-            Screen::Config => Screen::ModelSelect,
+            Screen::Config => { self.flush_config(); Screen::ModelSelect }
             Screen::ModelSelect => {
                 self.config_cursor = self.ctx_strategy.index();
                 self.config_section = 0;
@@ -836,7 +893,8 @@ impl App {
             let name = entry.name.clone();
             self.selected_model = Some(name.clone());
             self.warmup_last_hash = None;
-            self.context_length = crate::ollama::fetch_context_length(&self.base_url, &name);
+            self.context_length = crate::adapter::ollama::fetch_context_length(&self.base_url, &name);
+            self.model_template = crate::adapter::ollama::fetch_template(&self.base_url, &name);
             self.used_tokens = 0;
             self.messages.clear();
             self.input.clear();
@@ -862,7 +920,7 @@ impl App {
         let Some(entry) = self.models.get(self.model_cursor) else { return };
         let name = entry.name.clone();
         if let Some(ref mut tx) = self.ws_tx {
-            crate::ws_client::send_json(tx, serde_json::json!({"type":"select_model","model":name}));
+            crate::adapter::ws_client::send_json(tx, serde_json::json!({"type":"select_model","model":name}));
         }
         self.selected_model = Some(name);
         self.messages.clear();
@@ -951,7 +1009,7 @@ impl App {
             self.thinking_end_secs = None;
 
             if let Some(ref mut tx) = self.ws_tx {
-                crate::ws_client::send_json(tx, serde_json::json!({
+                crate::adapter::ws_client::send_json(tx, serde_json::json!({
                     "type": "message",
                     "content": content,
                     "attach": attach_paths,
@@ -1011,12 +1069,27 @@ impl App {
 
     /// Pushes an empty assistant placeholder and starts the Ollama stream
     /// from the current message history.
+    ///
+    /// Two paths:
+    ///   1. Fresh turn (last API-visible message is user) → /api/chat as usual.
+    ///   2. Continuation (last API-visible message is an assistant with
+    ///      non-empty content — happens after a tool call injects its result
+    ///      into the assistant's llm_content) → /api/generate with raw:true,
+    ///      using a hand-built prompt that leaves the assistant turn OPEN.
+    ///      Without this, the chat template closes the turn and the model
+    ///      treats the tool output as "response complete" and emits stop.
     pub fn start_stream(&mut self) {
+        let Some(model) = self.selected_model.clone() else {
+            self.stream_state = StreamState::Error("No model selected".to_string());
+            return;
+        };
+
         // lock identity at stream start so it stays stable across tool-call restarts
         let identity = match self.selected_model.as_deref() {
             Some(m) if !m.is_empty() => format!("{}#{}", model_display_name(m), self.session_id),
             _ => self.display_username(),
         };
+
         self.messages.push(Message {
             role: Role::Assistant,
             content: String::new(),
@@ -1030,19 +1103,67 @@ impl App {
             tool_collapsed: false,
         });
 
-        let model = self.selected_model.clone().unwrap();
         let base_url = self.base_url.clone();
         let num_ctx = match self.ctx_strategy {
             CtxStrategy::Full => self.context_length,
             CtxStrategy::Dynamic => self.context_length.map(|max| {
-                let needed = (self.used_tokens * 2).max(8192);
+                // Estimate tokens from current message content (4 chars ≈ 1 token).
+                // Tool results can be large and are added AFTER used_tokens was last
+                // recorded (stream is interrupted on tool calls, so used_tokens never
+                // updates mid-conversation). Using the content sizes avoids context
+                // overflow that would silently drop the original user question.
+                let msg_tokens: u64 = self.messages
+                    .iter()
+                    .filter(|m| !m.llm_content.is_empty() || m.role == Role::User)
+                    .map(|m| (m.llm_content.len() / 4) as u64)
+                    .sum();
+                let base = self.used_tokens.max(msg_tokens);
+                let needed = (base * 2).max(8192);
                 let rounded = if self.ctx_pow2 { needed.next_power_of_two() } else { needed };
                 rounded.min(max)
             }),
         };
 
+        // Build the history the API would see. The just-pushed placeholder has
+        // empty llm_content so it's filtered out.
+        let (system, history) = self.build_api_history();
+
+        let (tx, rx) = mpsc::channel();
+        self.stream_rx = Some(rx);
+        self.stream_state = StreamState::Streaming;
+        self.stream_started_at = Some(std::time::Instant::now());
+        self.thinking_end_secs = None;
+
+        let gen_params = self.gen_params;
+        let keep_alive = self.keep_alive;
+        let thinking   = self.thinking;
+
+        // Detect continuation and, if the template format is known, build a
+        // raw prompt. Images disqualify the raw path (the generate endpoint
+        // doesn't accept them in raw mode) — fall back to /api/chat.
+        let is_continuation = history.last().is_some_and(|(r, _)| r == "assistant");
+        let has_images = self.messages.iter().any(|m| !m.images.is_empty());
+        let raw_prompt = if is_continuation && !has_images {
+            self.model_template
+                .as_deref()
+                .and_then(detect_template_format)
+                .map(|fmt| {
+                    let sys = if system.is_empty() { None } else { Some(system.as_str()) };
+                    build_raw_prompt(fmt, sys, &history)
+                })
+        } else {
+            None
+        };
+
+        if let Some(prompt) = raw_prompt {
+            std::thread::spawn(move || {
+                crate::adapter::ollama::stream_generate_raw(&base_url, model, prompt, num_ctx, gen_params, keep_alive, thinking, tx);
+            });
+            return;
+        }
+
+        // /api/chat path
         let mut chat_messages: Vec<ChatMessage> = Vec::new();
-        let system = self.full_system_prompt();
         if !system.is_empty() {
             chat_messages.push(ChatMessage {
                 role: "system".to_string(),
@@ -1063,17 +1184,8 @@ impl App {
                 }),
         );
 
-        let (tx, rx) = mpsc::channel();
-        self.stream_rx = Some(rx);
-        self.stream_state = StreamState::Streaming;
-        self.stream_started_at = Some(std::time::Instant::now());
-        self.thinking_end_secs = None;
-
-        let gen_params = self.gen_params;
-        let keep_alive = self.keep_alive;
-        let thinking   = self.thinking;
         std::thread::spawn(move || {
-            crate::ollama::stream_chat(&base_url, model, chat_messages, num_ctx, gen_params, keep_alive, thinking, tx);
+            crate::adapter::ollama::stream_chat(&base_url, model, chat_messages, num_ctx, gen_params, keep_alive, thinking, tx);
         });
     }
 
@@ -1152,7 +1264,15 @@ impl App {
                                         if let Some(pos) = tool_pos {
                                             last.content.truncate(pos);
                                             last.content = last.content.trim_end().to_string();
-                                            // llm_content intentionally NOT updated here
+                                            // Truncate llm_content at end of </tool> to avoid sending
+                                            // text the model started generating AFTER the tag (before
+                                            // the tool ran). That pre-result text confuses the model
+                                            // into continuing a wrong analysis on the next turn.
+                                            // We still keep the <tool>…</tool> tag itself so the
+                                            // model can see it called a tool in the history.
+                                            if let Some(end) = last.llm_content.find("</tool>") {
+                                                last.llm_content.truncate(end + 7);
+                                            }
                                         }
                                     }
                                     // capture thinking duration for the intermediate message
@@ -1418,8 +1538,8 @@ impl App {
 
     /// Process one WsClientFrame. Returns false if the connection is dead (ws_rx should not
     /// be restored), true otherwise.
-    fn handle_ws_frame(&mut self, frame: crate::ws_client::WsClientFrame) -> bool {
-        use crate::ws_client::WsClientFrame as F;
+    fn handle_ws_frame(&mut self, frame: crate::adapter::ws_client::WsClientFrame) -> bool {
+        use crate::adapter::ws_client::WsClientFrame as F;
         match frame {
             F::Models { entries } => {
                 self.models = entries;
@@ -1432,7 +1552,7 @@ impl App {
             F::Connected { model, room_id, session_id, username, user_session_id, .. } => {
                 // if models weren't sent (old server or --model in query), populate fallback
                 if self.models.is_empty() {
-                    self.models = vec![crate::ollama::ModelEntry {
+                    self.models = vec![crate::adapter::ollama::ModelEntry {
                         name: model.clone(),
                         parameter_size: None,
                         quantization_level: None,
@@ -1493,6 +1613,9 @@ impl App {
                     if last.role == Role::Assistant {
                         last.thinking_secs = self.thinking_end_secs
                             .or_else(|| self.stream_started_at.map(|t| t.elapsed().as_secs_f64()));
+                        // Same as local path: inject result into assistant llm_content so
+                        // the API never sees a "user" role carrying tool output.
+                        last.llm_content.push_str(&format!("\n[Tool output for: {command}]\n{result}"));
                     }
                 }
                 let label_display = if label.is_empty() { command.clone() } else { label };
@@ -1503,7 +1626,7 @@ impl App {
                 self.messages.push(Message {
                     role: Role::Tool,
                     content: result.clone(),
-                    llm_content: format!("Tool result:\n{result}"),
+                    llm_content: String::new(), // empty → excluded from API, UI-only
                     images: vec![],
                     attachments: vec![Attachment {
                         filename: fname, path: PathBuf::new(),
@@ -1706,7 +1829,7 @@ impl App {
             .find(|m| m.role == Role::Assistant && !m.content.is_empty())
             .map(|m| m.content.clone());
         if let Some(text) = text {
-            if crate::clipboard::copy(&text) {
+            if crate::adapter::clipboard::copy(&text) {
                 self.copy_notice = Some(std::time::Instant::now());
             }
         }
@@ -1752,7 +1875,7 @@ impl App {
     pub fn copy_block(&mut self, idx: usize) {
         if let Some(msg) = self.messages.get(idx) {
             let text = msg.content.clone();
-            if !text.is_empty() && crate::clipboard::copy(&text) {
+            if !text.is_empty() && crate::adapter::clipboard::copy(&text) {
                 self.copy_notice = Some(std::time::Instant::now());
             }
         }
@@ -1795,7 +1918,7 @@ impl App {
             }
 
             if let Some(ref mut tx) = self.ws_tx {
-                crate::ws_client::send_json(tx, serde_json::json!({
+                crate::adapter::ws_client::send_json(tx, serde_json::json!({
                     "type": "ask_response", "content": response
                 }));
             }
@@ -1804,6 +1927,26 @@ impl App {
         }
 
         // ── Local Ollama path ────────────────────────────────────────────
+        // destructive shell command: execute or decline before normal ask handling
+        if let Some(call) = self.pending_tool_call.take() {
+            self.ask = None;
+            self.ask_cursor = 0;
+            self.input.clear();
+            self.cursor_pos = 0;
+            self.auto_scroll = true;
+            if response == "Yes" {
+                self.execute_tool_call(&call);
+            } else {
+                let cmd = call.split_whitespace().next().unwrap_or("?");
+                self.push_tool_result(
+                    &call,
+                    "Command declined by user.".to_string(),
+                    format!("\u{26d4} {cmd}"),
+                    "",
+                );
+            }
+            return;
+        }
         // patch confirmation: apply or decline before normal ask handling
         if let Some(diff) = self.pending_patch.take() {
             self.ask = None;
@@ -1869,7 +2012,7 @@ impl App {
     pub fn switch_to_local(&mut self) {
         // close WS connection
         if let Some(ref mut tx) = self.ws_tx {
-            let _ = crate::ws_client::write_frame(tx, 8, &[]); // opcode 8 = CLOSE
+            let _ = crate::adapter::ws_client::write_frame(tx, 8, &[]); // opcode 8 = CLOSE
         }
         self.ws_tx = None;
         self.ws_rx = None;
@@ -1887,9 +2030,9 @@ impl App {
 
         // fetch local models in background so the UI stays responsive
         let base_url = self.base_url.clone();
-        let (tx, rx) = mpsc::channel::<Result<Vec<crate::ollama::ModelEntry>, String>>();
+        let (tx, rx) = mpsc::channel::<Result<Vec<crate::adapter::ollama::ModelEntry>, String>>();
         std::thread::spawn(move || {
-            let _ = tx.send(crate::ollama::list_models(&base_url));
+            let _ = tx.send(crate::adapter::ollama::list_models(&base_url));
         });
         // store receiver so poll_local_models() can pick it up
         self.local_models_rx = Some(rx);
@@ -1948,7 +2091,7 @@ impl App {
         let ws_url = self.remote_ws_url();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(crate::ws_client::connect(&ws_url));
+            let _ = tx.send(crate::adapter::ws_client::connect(&ws_url));
         });
         self.remote_connect_rx = Some(rx);
     }
@@ -1966,9 +2109,9 @@ impl App {
         self.remote_connecting = true;
         self.remote_connect_error = None;
 
-        let (tx, rx) = mpsc::channel::<Result<Vec<crate::ollama::ModelEntry>, String>>();
+        let (tx, rx) = mpsc::channel::<Result<Vec<crate::adapter::ollama::ModelEntry>, String>>();
         std::thread::spawn(move || {
-            let _ = tx.send(crate::ollama::list_models(&base_url));
+            let _ = tx.send(crate::adapter::ollama::list_models(&base_url));
         });
         self.remote_ollama_rx = Some(rx);
     }
@@ -2052,7 +2195,7 @@ impl App {
 
     // --- pinned files ---
 
-    pub fn effective_enabled_neurons(&self) -> Vec<&crate::synapse::Neuron> {
+    pub fn effective_enabled_neurons(&self) -> Vec<&crate::domain::neuron::Neuron> {
         match self.neuron_mode {
             NeuronMode::Presets => {
                 if let Some(ref pname) = self.active_preset {
@@ -2077,15 +2220,19 @@ impl App {
         let enabled = self.effective_enabled_neurons();
         match self.neuron_mode {
             NeuronMode::Smart => {
-                let reasoning: Vec<&crate::synapse::Neuron> = enabled.iter()
-                    .filter(|n| !neuron_is_tooling(n)).copied().collect();
-                let tooling: Vec<&crate::synapse::Neuron> = enabled.iter()
-                    .filter(|n| neuron_is_tooling(n)).copied().collect();
-                let ctx = crate::synapse::build_tool_context(&reasoning);
+                // User chooses per-neuron: initial (always loaded) vs on-demand
+                // (referenced in a manifest, pulled in via <load_neuron>).
+                let initial: Vec<&crate::domain::neuron::Neuron> = enabled.iter()
+                    .filter(|n| !self.on_demand_neurons.contains(&n.name))
+                    .copied().collect();
+                let on_demand: Vec<&crate::domain::neuron::Neuron> = enabled.iter()
+                    .filter(|n| self.on_demand_neurons.contains(&n.name))
+                    .copied().collect();
+                let ctx = crate::domain::neuron::build_tool_context(&initial);
                 if !ctx.is_empty() { parts.push(ctx); }
-                if !tooling.is_empty() {
+                if !on_demand.is_empty() {
                     let mut manifest = "## On-demand neurons\nNot currently loaded. Request one with `<load_neuron>Name</load_neuron>` when you need it:\n".to_string();
-                    for n in &tooling {
+                    for n in &on_demand {
                         let desc = if n.description.is_empty() { String::new() } else { format!(" — {}", n.description) };
                         manifest.push_str(&format!("- **{}**{}\n", n.name, desc));
                     }
@@ -2093,7 +2240,7 @@ impl App {
                 }
             }
             _ => {
-                let ctx = crate::synapse::build_tool_context(&enabled);
+                let ctx = crate::domain::neuron::build_tool_context(&enabled);
                 if !ctx.is_empty() { parts.push(ctx); }
             }
         }
@@ -2135,7 +2282,7 @@ impl App {
         self.warmup_started_at = Some(std::time::Instant::now());
         self.warmup_prompt_tokens = Some((system.len() / 4) as u64);
         std::thread::spawn(move || {
-            crate::ollama::warmup(&base_url, model, system, num_ctx, keep_alive);
+            crate::adapter::ollama::warmup(&base_url, model, system, num_ctx, keep_alive);
             let _ = tx.send(());
         });
     }
@@ -2211,7 +2358,7 @@ impl App {
     /// In WS mode: send an `ls` request to the server and show the picker in loading state.
     pub fn request_server_ls(&mut self, rel_path: &str) {
         if let Some(ref mut tx) = self.ws_tx {
-            crate::ws_client::send_json(tx, serde_json::json!({"type":"ls","path":rel_path}));
+            crate::adapter::ws_client::send_json(tx, serde_json::json!({"type":"ls","path":rel_path}));
         }
         let dir = PathBuf::from(rel_path);
         if self.file_picker.is_none() {
@@ -2566,6 +2713,28 @@ impl App {
 
     pub fn handle_tool_call(&mut self, call: &str) {
         let call = call.trim();
+        let cmd = call.split_once(' ').map(|p| p.0).unwrap_or(call);
+        let is_builtin = matches!(cmd,
+            "read_file" | "write_file" | "edit_file" | "grep_files" | "glob_files");
+
+        // Gate destructive shell passthrough behind a confirm prompt unless
+        // auto-accept is on. Built-ins bypass: write_file/edit_file are
+        // explicit about the target path so the user already sees the impact;
+        // read_file/grep_files/glob_files are read-only.
+        if !is_builtin && !self.auto_accept && is_destructive_shell(call) {
+            self.pending_tool_call = Some(call.to_string());
+            self.ask = Some(InputRequest {
+                question: format!("Run destructive shell command? `{call}`"),
+                kind: AskKind::Confirm,
+            });
+            self.ask_cursor = 0;
+            return;
+        }
+
+        self.execute_tool_call(call);
+    }
+
+    fn execute_tool_call(&mut self, call: &str) {
         let (cmd, args) = call.split_once(' ').unwrap_or((call, ""));
         let args = args.trim().trim_start_matches('@');
 
@@ -2573,17 +2742,17 @@ impl App {
         // write_file and edit_file use the full call body (multi-line content after cmd)
         let full_args = call.splitn(2, char::is_whitespace).nth(1).unwrap_or("").trim_start_matches('@');
         let builtin_result = match cmd {
-            "read_file"  => Some(crate::tools::read_file(full_args, &self.working_dir)),
-            "write_file" => Some(crate::tools::write_file(full_args, &self.working_dir)),
-            "edit_file"  => Some(crate::tools::edit_file(full_args, &self.working_dir)),
-            "grep_files" => Some(crate::tools::grep_files(full_args, &self.working_dir)),
-            "glob_files" => Some(crate::tools::glob_files(full_args, &self.working_dir)),
+            "read_file"  => Some(crate::adapter::tools_native::read_file(full_args, &self.working_dir)),
+            "write_file" => Some(crate::adapter::tools_native::write_file(full_args, &self.working_dir)),
+            "edit_file"  => Some(crate::adapter::tools_native::edit_file(full_args, &self.working_dir)),
+            "grep_files" => Some(crate::adapter::tools_native::grep_files(full_args, &self.working_dir)),
+            "glob_files" => Some(crate::adapter::tools_native::glob_files(full_args, &self.working_dir)),
             _ => None,
         };
 
         if let Some(result) = builtin_result {
             let tool_label = format!("built-in \u{203a} {cmd}");
-            return self.push_tool_result(result, tool_label, args);
+            return self.push_tool_result(call, result, tool_label, args);
         }
 
         // search across all neurons for a matching behaviour
@@ -2599,7 +2768,7 @@ impl App {
         };
 
         let result = if let Some((_, b)) = &found {
-            let crate::synapse::SynapseKind::Tool { command, .. } = &b.kind;
+            let crate::domain::neuron::SynapseKind::Tool { command, .. } = &b.kind;
             execute_command(command, args, &self.working_dir)
         } else if shell_neuron.is_some() {
             execute_command(cmd, args, &self.working_dir)
@@ -2613,16 +2782,40 @@ impl App {
             .or_else(|| shell_neuron.map(|n| format!("{} \u{203a} {}", n.name, cmd)))
             .unwrap_or_else(|| cmd.to_string());
 
-        self.push_tool_result(result, tool_label, args);
+        self.push_tool_result(call, result, tool_label, args);
     }
 
-    fn push_tool_result(&mut self, result: String, tool_label: String, args: &str) {
+    fn push_tool_result(&mut self, call: &str, result: String, tool_label: String, args: &str) {
         let filename = Path::new(args)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| if args.is_empty() { ".".to_string() } else { args.to_string() });
         let size = result.len();
-        let llm_content = format!("Tool result:\n{result}");
+
+        // Inject result into the last assistant message's llm_content so the model
+        // never sees tool output as a user-role message — it's part of its own turn.
+        // Fallback: if we reach here without an assistant turn to own the output
+        // (rare — means a tool call ran outside the normal stream lifecycle),
+        // create a minimal assistant placeholder so the result isn't dropped
+        // silently. Empty content keeps it invisible in the UI.
+        let owned = matches!(self.messages.last(), Some(m) if m.role == Role::Assistant);
+        if !owned {
+            self.messages.push(Message {
+                role: Role::Assistant,
+                content: String::new(),
+                llm_content: String::new(),
+                images: vec![],
+                attachments: vec![],
+                thinking: String::new(),
+                thinking_secs: None,
+                stats: None,
+                tool_call: None,
+                tool_collapsed: false,
+            });
+        }
+        if let Some(last) = self.messages.last_mut() {
+            last.llm_content.push_str(&format!("\n[Tool output for: {call}]\n{result}"));
+        }
 
         const MAX_DISPLAY_LINES: usize = 15;
         let display_content = {
@@ -2635,10 +2828,11 @@ impl App {
             }
         };
 
+        // Display-only block (llm_content empty → excluded from API).
         self.messages.push(Message {
             role: Role::Tool,
             content: display_content,
-            llm_content,
+            llm_content: String::new(),
             images: vec![],
             attachments: vec![Attachment {
                 filename,
@@ -2652,6 +2846,7 @@ impl App {
             tool_call: Some(tool_label),
             tool_collapsed: true,
         });
+
         self.auto_scroll = true;
         self.start_stream();
     }
@@ -3080,6 +3275,57 @@ pub fn extract_tool_call(content: &str) -> Option<&str> {
     if end >= start { Some(&scan[start..end]) } else { None }
 }
 
+/// Returns true if the shell command line includes a destructive operation
+/// that should require explicit user confirmation. Conservative — false
+/// positives are preferred to false negatives. Skips `sudo` prefix and
+/// resolves `/usr/bin/rm` → `rm` so quoted paths don't slip through.
+fn is_destructive_shell(call: &str) -> bool {
+    const DESTRUCTIVE: &[&str] = &[
+        "rm", "rmdir", "mv", "dd", "mkfs", "shred",
+        "truncate", "chmod", "chown", "chgrp",
+    ];
+    for segment in call.split(|c: char| matches!(c, ';' | '|' | '&')) {
+        let mut tokens = segment.split_whitespace();
+        let mut first = tokens.next().unwrap_or("");
+        if first == "sudo" { first = tokens.next().unwrap_or(""); }
+        let basename = first.rsplit('/').next().unwrap_or(first);
+        if DESTRUCTIVE.contains(&basename) { return true; }
+        if basename == "git" {
+            let next = tokens.next().unwrap_or("");
+            if matches!(next, "rm" | "mv" | "clean" | "reset" | "checkout") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Cap shell output so a single `<tool>cat huge.json</tool>` cannot blow the
+/// model's context window. 500 lines OR 32KB, whichever is hit first; suffix
+/// tells the model how to fetch the rest.
+fn truncate_output(out: &str) -> String {
+    const MAX_LINES: usize = 500;
+    const MAX_BYTES: usize = 32 * 1024;
+
+    let total_bytes = out.len();
+    let total_lines = out.lines().count();
+    if total_lines <= MAX_LINES && total_bytes <= MAX_BYTES {
+        return out.to_string();
+    }
+
+    // pick the tighter of the two cuts, then back off to a char boundary
+    let line_cut: usize = out.split_inclusive('\n').take(MAX_LINES).map(str::len).sum();
+    let mut cut = line_cut.min(MAX_BYTES).min(total_bytes);
+    while cut > 0 && !out.is_char_boundary(cut) { cut -= 1; }
+
+    let head = &out[..cut];
+    let extra_lines = total_lines.saturating_sub(head.lines().count());
+    let extra_bytes = total_bytes - cut;
+    format!(
+        "{head}\n[... truncated: {extra_lines} more lines, {extra_bytes} more bytes — pipe to head/sed or use read_file with offset]"
+    )
+}
+
 /// Executes a command via `sh -c` so the full shell syntax is supported:
 /// quotes, spaces, redirections, pipes, etc.
 /// `command` may include fixed flags (e.g. "grep -rn").
@@ -3106,11 +3352,11 @@ fn execute_command(command: &str, args: &str, working_dir: &Path) -> String {
             let stderr = String::from_utf8_lossy(&out.stderr);
             if !out.status.success() {
                 let msg = if !stderr.is_empty() { stderr } else { stdout };
-                format!("error: {msg}")
+                truncate_output(&format!("error: {msg}"))
             } else if stdout.is_empty() {
                 "Done.".to_string()
             } else {
-                stdout.into_owned()
+                truncate_output(&stdout)
             }
         }
         Err(e) => format!("error: {e}"),
@@ -3716,3 +3962,139 @@ pub fn build_runtime_context(model: &str, ctx_len: Option<u64>, mode: RuntimeMod
     }
 }
 
+// ── Raw continuation prompt (opt B: /api/generate with raw:true) ──────────────
+//
+// After a tool call, the assistant turn is mid-generation. Sending the history
+// back through /api/chat makes Ollama re-apply the chat template, which closes
+// the assistant turn — the model sees "I already answered" and stops.
+//
+// We build the prompt manually here, using the model's own template format,
+// and leave the last assistant turn OPEN (no closing token). Ollama then
+// continues generating from that point — no re-applied template, no new turn.
+
+#[derive(Debug, Clone, Copy)]
+pub enum TemplateFormat {
+    ChatML, // qwen, deepseek, nemotron, most recent reasoning models
+    Llama3, // llama 3.x
+    Gemma,  // gemma 2/3 (role=model)
+}
+
+/// Detect format from the Go template string returned by /api/show.
+/// Unknown formats return None; callers must fall back to /api/chat.
+pub fn detect_template_format(template: &str) -> Option<TemplateFormat> {
+    if template.contains("<|im_start|>") {
+        Some(TemplateFormat::ChatML)
+    } else if template.contains("<|start_header_id|>") {
+        Some(TemplateFormat::Llama3)
+    } else if template.contains("<start_of_turn>") {
+        Some(TemplateFormat::Gemma)
+    } else {
+        None
+    }
+}
+
+/// Build a raw prompt string for /api/generate with raw:true.
+///
+/// `history` carries API-shaped (role, content) pairs — roles are "user" /
+/// "assistant" / "system" (the system slot is handled separately).
+///
+/// If the last message is an assistant, we leave its turn OPEN (no closing
+/// token, no new assistant header). Ollama continues generating right where
+/// it left off. Otherwise, we close all previous turns and open a fresh
+/// assistant turn.
+pub fn build_raw_prompt(
+    fmt: TemplateFormat,
+    system: Option<&str>,
+    history: &[(String, String)],
+) -> String {
+    let mut s = String::new();
+    let last_is_assistant = history.last().is_some_and(|(r, _)| r == "assistant");
+
+    match fmt {
+        TemplateFormat::ChatML => {
+            if let Some(sys) = system {
+                s.push_str(&format!("<|im_start|>system\n{sys}<|im_end|>\n"));
+            }
+            for (i, (role, content)) in history.iter().enumerate() {
+                let is_last = i + 1 == history.len();
+                if is_last && last_is_assistant {
+                    s.push_str(&format!("<|im_start|>assistant\n{content}"));
+                } else {
+                    s.push_str(&format!("<|im_start|>{role}\n{content}<|im_end|>\n"));
+                }
+            }
+            if !last_is_assistant {
+                s.push_str("<|im_start|>assistant\n");
+            }
+        }
+        TemplateFormat::Llama3 => {
+            s.push_str("<|begin_of_text|>");
+            if let Some(sys) = system {
+                s.push_str(&format!(
+                    "<|start_header_id|>system<|end_header_id|>\n\n{sys}<|eot_id|>"
+                ));
+            }
+            for (i, (role, content)) in history.iter().enumerate() {
+                let is_last = i + 1 == history.len();
+                if is_last && last_is_assistant {
+                    s.push_str(&format!(
+                        "<|start_header_id|>assistant<|end_header_id|>\n\n{content}"
+                    ));
+                } else {
+                    s.push_str(&format!(
+                        "<|start_header_id|>{role}<|end_header_id|>\n\n{content}<|eot_id|>"
+                    ));
+                }
+            }
+            if !last_is_assistant {
+                s.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
+            }
+        }
+        TemplateFormat::Gemma => {
+            // Gemma has no native system role; prepend it to the first user turn
+            // if present. Assistant role is emitted as "model".
+            let mut system_consumed = system.is_none();
+            for (i, (role, content)) in history.iter().enumerate() {
+                let is_last = i + 1 == history.len();
+                let g_role = if role == "assistant" { "model" } else { "user" };
+                let body = if !system_consumed && role == "user" {
+                    system_consumed = true;
+                    format!("{}\n\n{}", system.unwrap(), content)
+                } else {
+                    content.clone()
+                };
+                if is_last && last_is_assistant {
+                    s.push_str(&format!("<start_of_turn>model\n{body}"));
+                } else {
+                    s.push_str(&format!("<start_of_turn>{g_role}\n{body}<end_of_turn>\n"));
+                }
+            }
+            // If no user turn carried the system, prepend it as a bare user turn.
+            if !system_consumed {
+                let sys = system.unwrap_or("");
+                let mut head = format!("<start_of_turn>user\n{sys}<end_of_turn>\n");
+                head.push_str(&s);
+                s = head;
+            }
+            if !last_is_assistant {
+                s.push_str("<start_of_turn>model\n");
+            }
+        }
+    }
+    s
+}
+
+impl App {
+    /// Assemble the (system, history) tuple that would be sent to /api/chat,
+    /// matching the filter used in start_stream. Used by the raw-prompt builder.
+    pub fn build_api_history(&self) -> (String, Vec<(String, String)>) {
+        let system = self.full_system_prompt();
+        let history: Vec<(String, String)> = self.messages
+            .iter()
+            .filter(|m| !m.llm_content.is_empty() || m.role == Role::User)
+            .map(|m| (m.role.to_api_str().to_string(), m.llm_content.clone()))
+            .collect();
+        (system, history)
+    }
+
+}

@@ -70,7 +70,7 @@
 > ❌ Wrong: *[invents 10 fake endpoints]*
 
 ## 🧩 Integration & Optimization
-- **→ Efferent:** Passes constrained decisions for execution.
-- **→ Synapse:** Receives hard-capped output for final formatting.
-- **→ Engram:** Logs constraint application, decision rationale, limit adherence.
+- **Efferent:** Passes constrained decisions for execution.
+- **Synapse:** Receives hard-capped output for final formatting.
+- **Engram:** Logs constraint application, decision rationale, limit adherence.
 - **Optimization:** Pre-compute limits. Use deterministic sampling if needed. Block recursive expansion.

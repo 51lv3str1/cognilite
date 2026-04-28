@@ -124,11 +124,12 @@ Las neuronas hoy gastan tokens en prosa que no se enforce.
 
 Aquí es donde un modelo deja de necesitar una persona sosteniendo el hilo de la revisión.
 
-### ~~3.1 Neuron `Architect`~~ ✅ done 2026-04-27
-- **Creado:** `.cognilite/neurons/architect/neuron.toml` + `thoughts/Architect.md`. Define protocolo (mapear → manifests → top-N por LOC → findings con `file:line` → resumen ejecutivo), categorías de finding (security/tech-debt/bug/perf/style), restricciones (solo lectura, no inventar líneas, sin bullets vacíos), y un ejemplo concreto.
+### ~~3.1 Neuron `Hippocampus`~~ ✅ done 2026-04-27
+- **Creado:** `.cognilite/neurons/hippocampus/neuron.toml` + `thoughts/Hippocampus.md`. Nombre cambiado de `Architect` a `Hippocampus` para mantener la convención neurocientífica del resto (Cortex/Synapse/Efferent/Engram/Insula/CingulateGate/Thalamus). El hipocampo maneja mapeo cognitivo + memoria episódica — encaja con el rol del auditor (mapear el proyecto y registrar findings). Contenido en inglés.
+- Define protocolo (mapear → manifests → top-N por LOC → findings con `file:line` → resumen ejecutivo), categorías (security/tech-debt/bug/perf/style), restricciones (solo lectura, no inventar líneas, sin bullets vacíos), ejemplo concreto.
 
 ### ~~3.2 Templates `/review` y `/audit`~~ ✅ done 2026-04-27
-- **Creados:** `.cognilite/templates/review.md` (revisión arquitectónica general, dispara `<load_neuron>Architect</load_neuron>` y describe el flow) y `.cognilite/templates/audit.md` (foco en `category="security"`: comandos sin gate, secretos hardcoded, inputs sin validar, boundaries violados, deps con CVEs, races en código sync). `/refactor` queda fuera por ahora — no pedido inmediato.
+- **Creados:** `.cognilite/templates/review.md` (revisión arquitectónica general, dispara `<load_neuron>Hippocampus</load_neuron>` y describe el flow) y `.cognilite/templates/audit.md` (foco en `category="security"`: comandos sin gate, secretos hardcoded, inputs sin validar, boundaries violados, deps con CVEs, races en código sync). Contenido en inglés. `/refactor` queda fuera por ahora — no pedido inmediato.
 
 ### ~~3.3 Tool builtin `tree`~~ ✅ done 2026-04-27
 - **Implementado en `adapter/tools_native.rs`:** `pub fn tree(args, working_dir)`. Usa `fd --max-depth N --type f` si está disponible (respeta `.gitignore`); fallback a `find` con excludes hard-coded (target/.git/node_modules/.venv). Output: árbol indentado por dir con LOC para archivos `.rs/.ts/.py/.go/.rb/.java/.c/.cpp/.h/.swift/.kt/.scala`. Cap inline a 32KB. Registrado como built-in en `runtime/tools.rs::execute_tool_call` (bypass del destructive-shell gate).
@@ -193,11 +194,11 @@ Semana 2:  Fase 1.3 (tests)                                    → ½ día
            Fase 1.4 (serde Config)                             → ¼ día
            Fase 2   (higiene de prompts)                       → ½ día
 
-Semana 3:  Fase 3.1-3.4 (Architect + templates + tree + map)   → 1 día
+Semana 3:  Fase 3.1-3.4 (Hippocampus + templates + tree + map) → 1 día
            Fase 3.5 (tag <finding>)                            → ½ día
            Fase 3.6 (tool note)                                → ½ día
 
-Validación: lanzar `cognilite --headless --preset architect "audita este repo"`
+Validación: lanzar `cognilite --headless --preset hippocampus "audita este repo"`
             sobre cognilite mismo. La salida esperada es un .md similar al que
             produjo esta revisión manual.
 ```
@@ -209,7 +210,7 @@ Validación: lanzar `cognilite --headless --preset architect "audita este repo"`
 El roadmap está completo cuando:
 
 ```bash
-cognilite --headless -m qwen3:8b --preset architect \
+cognilite --headless -m qwen3:8b --preset hippocampus \
   "Audita este proyecto. Emití findings estructurados y un resumen ejecutivo."
 ```
 

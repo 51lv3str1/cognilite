@@ -1,11 +1,11 @@
-Hacé una revisión arquitectónica del proyecto en el working directory.
+Run an architectural review of the project in the working directory.
 
-<load_neuron>Architect</load_neuron>
+<load_neuron>Hippocampus</load_neuron>
 
-Seguí el protocolo del Architect:
-1. Mapeá la estructura (usá el `<project_map>` ya inyectado o `<tool>tree</tool>`).
-2. Leé manifests y los 3-5 archivos top por LOC.
-3. Emití un `<finding>` por cada problema concreto, con `severity`, `file:line`, `category`.
-4. Cerrá con resumen ejecutivo: top-3 deudas, top-3 features, y lo que NO recomendás tocar.
+Follow the Hippocampus protocol:
+1. Map the structure (use the injected `<project_map>` if present, or `<tool>tree</tool>`).
+2. Read manifests and the top 3-5 files by LOC.
+3. Emit one `<finding>` per concrete problem, with `severity`, `file:line`, `category`.
+4. Close with an executive summary: top-3 debts, top-3 features, and what NOT to touch.
 
-Sé crítico pero accionable. Cada finding cita archivo y línea — sin citas vacías.
+Be critical but actionable. Every finding cites file and line — no empty citations.

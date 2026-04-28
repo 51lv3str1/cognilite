@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn extract_tag_generic_works() {
         assert_eq!(extract_tag("<mood>😊</mood>", "mood"), Some("😊"));
-        assert_eq!(extract_tag("<load_neuron>Architect</load_neuron>", "load_neuron"), Some("Architect"));
+        assert_eq!(extract_tag("<load_neuron>Hippocampus</load_neuron>", "load_neuron"), Some("Hippocampus"));
     }
 
     #[test]

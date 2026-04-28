@@ -1,0 +1,2 @@
+name = Hippocampus
+description = Project auditor. Maps structure, identifies technical debt and risks, issues structured findings with file:line.

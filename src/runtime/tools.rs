@@ -8,7 +8,7 @@ impl App {
         let call = call.trim();
         let cmd = call.split_once(' ').map(|p| p.0).unwrap_or(call);
         let is_builtin = matches!(cmd,
-            "read_file" | "write_file" | "edit_file" | "grep_files" | "glob_files" | "tree");
+            "read_file" | "write_file" | "edit_file" | "grep_files" | "glob_files" | "tree" | "note");
 
         // Gate destructive shell passthrough behind a confirm prompt unless
         // auto-accept is on. Built-ins bypass: write_file/edit_file are
@@ -41,6 +41,7 @@ impl App {
             "grep_files" => Some(crate::adapter::tools_native::grep_files(full_args, &self.working_dir)),
             "glob_files" => Some(crate::adapter::tools_native::glob_files(full_args, &self.working_dir)),
             "tree"       => Some(crate::adapter::tools_native::tree(full_args, &self.working_dir)),
+            "note"       => Some(crate::adapter::tools_native::note(full_args, &self.session_id)),
             _ => None,
         };
 
@@ -86,31 +87,6 @@ impl App {
             .unwrap_or_else(|| if args.is_empty() { ".".to_string() } else { args.to_string() });
         let size = result.len();
 
-        // Inject result into the last assistant message's llm_content so the model
-        // never sees tool output as a user-role message — it's part of its own turn.
-        // Fallback: if we reach here without an assistant turn to own the output
-        // (rare — means a tool call ran outside the normal stream lifecycle),
-        // create a minimal assistant placeholder so the result isn't dropped
-        // silently. Empty content keeps it invisible in the UI.
-        let owned = matches!(self.messages.last(), Some(m) if m.role == Role::Assistant);
-        if !owned {
-            self.messages.push(Message {
-                role: Role::Assistant,
-                content: String::new(),
-                llm_content: String::new(),
-                images: vec![],
-                attachments: vec![],
-                thinking: String::new(),
-                thinking_secs: None,
-                stats: None,
-                tool_call: None,
-                tool_collapsed: false,
-            });
-        }
-        if let Some(last) = self.messages.last_mut() {
-            last.llm_content.push_str(&format!("\n[Tool output for: {call}]\n{result}"));
-        }
-
         const MAX_DISPLAY_LINES: usize = 15;
         let display_content = {
             let count = result.lines().count();
@@ -118,15 +94,20 @@ impl App {
                 let head: String = result.lines().take(MAX_DISPLAY_LINES).collect::<Vec<_>>().join("\n");
                 format!("{head}\n[... {} more lines — full output sent to model]", count - MAX_DISPLAY_LINES)
             } else {
-                result
+                result.clone()
             }
         };
 
-        // Display-only block (llm_content empty → excluded from API).
+        // Push the tool output as a Role::Tool message with the full result in
+        // llm_content. Role::Tool maps to "user" in the API, so the model sees
+        // the result as a fresh user-role turn — the standard tool-use protocol.
+        // It works with every chat template and doesn't depend on raw-prompt
+        // continuation, which used to break for models that close their turn
+        // when they see tool output appended inside the assistant message.
         self.messages.push(Message {
             role: Role::Tool,
             content: display_content,
-            llm_content: String::new(),
+            llm_content: format!("[Tool output for: {call}]\n{result}"),
             images: vec![],
             attachments: vec![Attachment {
                 filename,

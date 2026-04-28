@@ -332,6 +332,119 @@ pub fn tree(args: &str, working_dir: &Path) -> String {
     out
 }
 
+#[cfg(test)]
+mod note_tests {
+    use super::*;
+
+    fn fresh_session() -> String {
+        // unique per test to avoid /tmp pollution between parallel runs
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let pid = std::process::id();
+        format!("test{:x}{:x}", n & 0xffff_ffff, pid)
+    }
+
+    #[test]
+    fn note_add_then_list_roundtrip() {
+        let sid = fresh_session();
+        assert!(note("add hello world", &sid).starts_with("Note added"));
+        let listed = note("list", &sid);
+        assert!(listed.contains("- hello world"));
+        // cleanup
+        note("clear", &sid);
+    }
+
+    #[test]
+    fn note_clear_resets_to_empty() {
+        let sid = fresh_session();
+        note("add line1", &sid);
+        note("add line2", &sid);
+        assert_eq!(note("clear", &sid), "Notes cleared.");
+        assert_eq!(note("list", &sid), "(no notes)");
+    }
+
+    #[test]
+    fn note_add_multiline_indents_continuation() {
+        let sid = fresh_session();
+        note("add first line\nsecond line", &sid);
+        let raw = read_notes(&sid).unwrap_or_default();
+        assert!(raw.contains("- first line\n  second line\n"));
+        note("clear", &sid);
+    }
+
+    #[test]
+    fn note_unknown_subcommand_errors() {
+        let sid = fresh_session();
+        let out = note("frobnicate", &sid);
+        assert!(out.starts_with("error:"));
+    }
+
+    #[test]
+    fn note_add_empty_text_errors() {
+        let sid = fresh_session();
+        let out = note("add   ", &sid);
+        assert!(out.starts_with("error:"));
+    }
+}
+
+// ── note (working memory) ─────────────────────────────────────────────────────
+
+/// `note add <text>` / `note list` / `note clear`.
+/// Persists to `/tmp/cognilite-notes-<session>.md` (one bullet per entry).
+/// The current contents are injected into the system prompt every turn so the
+/// model keeps a private scratchpad that survives between turns of a long task.
+pub fn note(args: &str, session_id: &str) -> String {
+    let trimmed = args.trim();
+    let (sub, rest) = trimmed.split_once(char::is_whitespace).unwrap_or((trimmed, ""));
+    match sub {
+        "add" => {
+            let text = rest.trim();
+            if text.is_empty() {
+                return "error: usage: note add <text>".to_string();
+            }
+            let path = note_path(session_id);
+            // indent multi-line continuations so each entry stays one bullet
+            let body = text.replace('\n', "\n  ");
+            let entry = format!("- {body}\n");
+            match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                Ok(mut f) => match std::io::Write::write_all(&mut f, entry.as_bytes()) {
+                    Ok(_) => {
+                        let total = path.metadata().map(|m| m.len()).unwrap_or(0);
+                        format!("Note added ({total} bytes total).")
+                    }
+                    Err(e) => format!("error: {e}"),
+                }
+                Err(e) => format!("error: {e}"),
+            }
+        }
+        "list" | "" => {
+            match read_notes(session_id) {
+                Some(s) if !s.trim().is_empty() => format!("## Notes\n\n{s}"),
+                _ => "(no notes)".to_string(),
+            }
+        }
+        "clear" => {
+            let path = note_path(session_id);
+            if path.exists() {
+                if let Err(e) = fs::remove_file(&path) {
+                    return format!("error: {e}");
+                }
+            }
+            "Notes cleared.".to_string()
+        }
+        _ => format!("error: unknown subcommand `{sub}` — use add/list/clear"),
+    }
+}
+
+/// Read the raw notes file for a session; None if missing or unreadable.
+pub fn read_notes(session_id: &str) -> Option<String> {
+    fs::read_to_string(note_path(session_id)).ok()
+}
+
+fn note_path(session_id: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("cognilite-notes-{session_id}.md"))
+}
+
 /// Detects project markers (Cargo.toml, package.json, etc.) and returns a
 /// `<project_map>...</project_map>` block summarizing the tree, or None if
 /// the working_dir does not look like a project root.

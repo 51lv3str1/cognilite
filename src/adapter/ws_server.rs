@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::app::{
     App, AskKind, Attachment, AttachmentKind, Message, NeuronMode, Role, StreamState,
-    extract_ask_tag, extract_load_neuron_tag, extract_mood_tag, extract_patch_tag,
-    extract_preview_tag, extract_tool_call, build_runtime_context, RuntimeMode,
+    extract_ask_tag, extract_finding_tag, extract_load_neuron_tag, extract_mood_tag,
+    extract_patch_tag, extract_preview_tag, extract_tool_call, build_runtime_context,
+    RuntimeMode,
 };
 use crate::adapter::headless_runner::safe_print_boundary;
 
@@ -421,7 +422,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
             thinking: String::new(),
             thinking_secs: None,
             stats: None,
-            tool_call: Some("Sala".to_string()),
+            tool_call: Some("Room".to_string()),
             tool_collapsed: false,
         };
         r.messages.push(join_msg);
@@ -523,6 +524,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
                 if should_respond {
                     let pre_respond_len = app.messages.len();
                     let room_len_before_respond = room.lock().unwrap().messages.len();
+                    app.findings_at_stream_start = app.findings.len();
                     app.start_stream();
                     if !stream_loop(&mut app, &mut stream, thinking_fwd, cfg.thinking_srv, cfg.yes) {
                         break;
@@ -676,7 +678,7 @@ pub fn run_session(mut stream: TcpStream, base_url: &str, cfg: SessionConfig, ro
             thinking: String::new(),
             thinking_secs: None,
             stats: None,
-            tool_call: Some("Sala".to_string()),
+            tool_call: Some("Room".to_string()),
             tool_collapsed: false,
         };
         r.messages.push(leave_msg);
@@ -970,6 +972,24 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                     send_json(stream, serde_json::json!({"type":"mood","emoji":emoji}));
                 }
 
+                // ── <finding> ───────────────────────────────────────────
+                // Accumulate, strip from display, retract any previously
+                // streamed token prefix so the client doesn't keep raw tags.
+                loop {
+                    let f = app.messages.last()
+                        .filter(|m| m.role == Role::Assistant)
+                        .and_then(|m| extract_finding_tag(&m.content));
+                    let Some(f) = f else { break };
+                    app.findings.push(f);
+                    if let Some(last) = app.messages.last_mut() {
+                        crate::domain::tags::strip_tag(&mut last.content, "finding");
+                        crate::domain::tags::strip_tag(&mut last.llm_content, "finding");
+                    }
+                    if let Some(last) = app.messages.last() {
+                        printed_up_to = printed_up_to.min(last.content.len());
+                    }
+                }
+
                 // ── <preview path="..."/> ───────────────────────────────
                 let preview_path = app.messages.last()
                     .filter(|m| m.role == Role::Assistant)
@@ -1029,6 +1049,8 @@ fn stream_loop(app: &mut App, stream: &mut TcpStream, thinking: bool, thinking_s
                         last.tool_call = Some(identity);
                     }
                 }
+                // emit the consolidated findings report (if any) before signaling done
+                app.push_findings_report();
                 return send_json(stream, serde_json::json!({
                     "type": "done",
                     "stats": {"tps": tps, "tokens": tokens, "prompt_eval": prompt_eval}

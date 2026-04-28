@@ -1458,7 +1458,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
         let popup_area = Rect { x: px, y: py, width: popup_w, height: popup_h };
         frame.render_widget(ratatui::widgets::Clear, popup_area);
         let block = Block::default()
-            .title(Span::styled(" Sala ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+            .title(Span::styled(" Room ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(ACCENT))

@@ -44,20 +44,38 @@ pub fn extract_tag<'a>(content: &'a str, name: &str) -> Option<&'a str> {
     if end >= start { Some(&scan[start..end]) } else { None }
 }
 
-/// Strip a complete `<name>...</name>` tag (open + body + close) from `content`,
-/// leaving the surrounding text. Operates on the part past `</think>`.
-/// Returns true if a tag was found and removed.
+/// Strip a complete `<name ...>...</name>` tag (open + body + close) from `content`,
+/// leaving the surrounding text. Operates on the part past `</think>`. Tolerates
+/// attributes on the opening tag (e.g. `<finding severity="high">`). Returns true
+/// if a tag was found and removed.
 pub fn strip_tag(content: &mut String, name: &str) -> bool {
     let scan_from = content.rfind("</think>").map(|i| i + 8).unwrap_or(0);
-    let open = format!("<{name}>");
-    let close = format!("</{name}>");
-    let Some(rel_open) = content[scan_from..].find(open.as_str()) else { return false };
-    let abs_open = scan_from + rel_open;
-    let Some(rel_close) = content[abs_open..].find(close.as_str()) else { return false };
-    let abs_end = abs_open + rel_close + close.len();
-    let before = content[..abs_open].trim_end().to_string();
-    let after  = content[abs_end..].to_string();
-    *content = if before.is_empty() { after } else { before + &after };
+    let prefix = format!("<{name}");
+    let close  = format!("</{name}>");
+
+    // find a real opening: `<name` followed by `>`, whitespace, or `/`.
+    // skips false matches like `<moody>` when looking for `mood`.
+    let mut start = scan_from;
+    let abs_open = loop {
+        let Some(rel) = content[start..].find(&prefix) else { return false };
+        let abs = start + rel;
+        let next = content.as_bytes().get(abs + prefix.len()).copied();
+        if matches!(next, Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'/')) {
+            break abs;
+        }
+        start = abs + 1;
+    };
+
+    let Some(rel_open_end) = content[abs_open..].find('>') else { return false };
+    let abs_open_end = abs_open + rel_open_end + 1;
+    let Some(rel_close) = content[abs_open_end..].find(&close) else { return false };
+    let abs_end = abs_open_end + rel_close + close.len();
+    // Preserve byte positions of `before`: do NOT trim_end. Headless prints
+    // bytes incrementally and tracks `printed_up_to` against this content; a
+    // trim would shift the suffix and split tokens already on stdout. A
+    // double-space artifact between `before` and `after` is acceptable —
+    // markdown collapses it in TUI render and remains readable in headless.
+    content.replace_range(abs_open..abs_end, "");
     true
 }
 
@@ -134,6 +152,59 @@ pub fn extract_load_neuron_tag(content: &str) -> Option<String> {
     extract_tag(content, "load_neuron").map(|s| s.trim().to_string())
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Finding {
+    pub severity: String, // "high" | "med" | "low" — kept as string so unknown values pass through
+    pub file:     String, // "path:line" — empty if not provided
+    pub category: String, // "security" | "tech-debt" | "bug" | "perf" | "style" | ""
+    pub body:     String, // free-form description (trimmed)
+}
+
+impl Finding {
+    /// Markdown bullet for the consolidated report.
+    pub fn to_markdown(&self) -> String {
+        let mut head = format!("**[{}]**", self.severity);
+        if !self.category.is_empty() { head.push_str(&format!(" *{}* ", self.category)); }
+        if !self.file.is_empty()     { head.push_str(&format!(" `{}`",  self.file)); }
+        format!("- {head}\n  {}", self.body.replace('\n', "\n  "))
+    }
+}
+
+/// Extract a single attribute value from an opening tag string.
+/// Returns "" if missing. Tolerant of single or double quotes.
+fn parse_attr(tag: &str, name: &str) -> String {
+    for q in ['"', '\''] {
+        let needle = format!("{name}={q}");
+        if let Some(s) = tag.find(&needle) {
+            let after = s + needle.len();
+            if let Some(e) = tag[after..].find(q) {
+                return tag[after..after + e].to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Detects a complete `<finding ...>body</finding>` outside `<think>` and code fences.
+/// Reads optional attributes `severity`, `file`, `category`. Returns None until both
+/// the opening `>` and the closing `</finding>` are present in the stream.
+pub fn extract_finding_tag(content: &str) -> Option<Finding> {
+    let scan = after_think(content)?;
+    let open = scan.find("<finding")?;
+    if is_in_code_block(scan, open) { return None; }
+    let tag_close = scan[open..].find('>')?;
+    let inner_start = open + tag_close + 1;
+    let close = scan[inner_start..].find("</finding>")?;
+    let tag_str = &scan[open..open + tag_close + 1];
+    let body = scan[inner_start..inner_start + close].trim().to_string();
+    Some(Finding {
+        severity: parse_attr(tag_str, "severity"),
+        file:     parse_attr(tag_str, "file"),
+        category: parse_attr(tag_str, "category"),
+        body,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,9 +247,11 @@ mod tests {
 
     #[test]
     fn strip_tag_removes_pair() {
+        // strip preserves byte positions — produces a double space between
+        // "before " and " after". This is intentional: see strip_tag comment.
         let mut s = "before <mood>😊</mood> after".to_string();
         assert!(strip_tag(&mut s, "mood"));
-        assert_eq!(s, "before after");
+        assert_eq!(s, "before  after");
     }
 
     #[test]
@@ -219,5 +292,73 @@ mod tests {
     #[test]
     fn extract_mood_trims() {
         assert_eq!(extract_mood_tag("<mood>  😊  </mood>"), Some("😊".to_string()));
+    }
+
+    #[test]
+    fn extract_finding_full_attrs() {
+        let s = r#"prose <finding severity="high" file="src/app.rs:42" category="security">
+shell passthrough without a gate.
+Fix: match destructive commands in handle_tool_call.
+</finding> tail"#;
+        let f = extract_finding_tag(s).unwrap();
+        assert_eq!(f.severity, "high");
+        assert_eq!(f.file, "src/app.rs:42");
+        assert_eq!(f.category, "security");
+        assert!(f.body.contains("shell passthrough"));
+        assert!(f.body.contains("Fix:"));
+    }
+
+    #[test]
+    fn extract_finding_missing_attrs_ok() {
+        let s = "<finding>just a body</finding>";
+        let f = extract_finding_tag(s).unwrap();
+        assert_eq!(f.severity, "");
+        assert_eq!(f.file, "");
+        assert_eq!(f.category, "");
+        assert_eq!(f.body, "just a body");
+    }
+
+    #[test]
+    fn extract_finding_skips_inside_think() {
+        let s = "<think><finding severity=\"high\">x</finding></think> ok";
+        assert!(extract_finding_tag(s).is_none());
+    }
+
+    #[test]
+    fn extract_finding_returns_none_when_unclosed() {
+        let s = "<finding severity=\"high\">still streaming";
+        assert!(extract_finding_tag(s).is_none());
+    }
+
+    #[test]
+    fn strip_tag_handles_attributes() {
+        let mut s = r#"a <finding severity="high" file="x:1">body</finding> b"#.to_string();
+        assert!(strip_tag(&mut s, "finding"));
+        // double space preserved on purpose — see strip_tag comment
+        assert_eq!(s, "a  b");
+    }
+
+    #[test]
+    fn strip_tag_does_not_match_prefix() {
+        // "<moody>" must not be stripped when asked to strip "mood"
+        let mut s = "<moody>x</moody>".to_string();
+        assert!(!strip_tag(&mut s, "mood"));
+        assert_eq!(s, "<moody>x</moody>");
+    }
+
+    #[test]
+    fn finding_to_markdown_includes_attrs() {
+        let f = Finding {
+            severity: "high".into(),
+            file: "src/app.rs:42".into(),
+            category: "security".into(),
+            body: "first line\nsecond line".into(),
+        };
+        let md = f.to_markdown();
+        assert!(md.contains("[high]"));
+        assert!(md.contains("*security*"));
+        assert!(md.contains("`src/app.rs:42`"));
+        // multiline body must be indented for nested bullet rendering
+        assert!(md.contains("first line\n  second line"));
     }
 }

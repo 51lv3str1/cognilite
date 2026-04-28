@@ -2,8 +2,8 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use crate::app::{
     App, AskKind, AttachmentKind, Attachment, CtxStrategy, InputRequest, Message, NeuronMode,
-    Role, StreamState, extract_ask_tag, extract_load_neuron_tag, extract_mood_tag,
-    extract_patch_tag, extract_tool_call, resolve_attachments,
+    Role, StreamState, extract_ask_tag, extract_finding_tag, extract_load_neuron_tag,
+    extract_mood_tag, extract_patch_tag, extract_tool_call, resolve_attachments,
     build_runtime_context, RuntimeMode,
 };
 
@@ -25,6 +25,7 @@ pub struct HeadlessArgs {
     pub thinking_stderr: bool, // stream thinking to stderr (server terminal)
     pub server_mode: bool,     // launched by the HTTP server
     pub username: Option<String>,
+    pub metrics: bool,         // write per-turn JSON to /tmp/cognilite-metrics-<session>.json
 }
 
 impl Default for HeadlessArgs {
@@ -33,7 +34,8 @@ impl Default for HeadlessArgs {
             message: None, model: None, neuron_mode: None, preset: None,
             no_neurons: vec![], temperature: None, top_p: None, repeat_penalty: None,
             ctx_strategy: None, keep_alive: false, pin: vec![], attach: vec![],
-            yes: false, thinking: false, thinking_stderr: false, server_mode: false, username: None,
+            yes: false, thinking: false, thinking_stderr: false, server_mode: false,
+            username: None, metrics: false,
         }
     }
 }
@@ -136,12 +138,15 @@ pub fn run(base_url: &str, args: HeadlessArgs) -> i32 {
         tool_call: None,
         tool_collapsed: false,
     });
+    app.findings_at_stream_start = app.findings.len();
     app.start_stream();
 
-    run_stream_loop(&mut app, args.yes, args.thinking, args.thinking_stderr)
+    run_stream_loop(&mut app, args.yes, args.thinking, args.thinking_stderr, args.metrics)
 }
 
-fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool, show_thinking_stderr: bool) -> i32 {
+fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool, show_thinking_stderr: bool, metrics: bool) -> i32 {
+    let turn_started_at = std::time::Instant::now();
+    let mut tool_calls: u64 = 0;
     'outer: loop {
         let rx = match app.stream_rx.take() {
             Some(r) => r,
@@ -228,6 +233,7 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool, show_thin
                     }
                     println!();
                     eprintln!("[tool: {call}]");
+                    tool_calls += 1;
                     app.handle_tool_call(&call);
                     // destructive-shell gate may have left an ask pending — resolve it
                     // here so the headless flow doesn't stall on a dangling confirm.
@@ -339,6 +345,24 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool, show_thin
                     }
                     app.current_mood = Some(emoji);
                 }
+
+                // <finding> — accumulate and strip from display so they don't print inline
+                loop {
+                    let f = app.messages.last()
+                        .filter(|m| m.role == Role::Assistant)
+                        .and_then(|m| extract_finding_tag(&m.content));
+                    let Some(f) = f else { break };
+                    app.findings.push(f);
+                    if let Some(last) = app.messages.last_mut() {
+                        crate::domain::tags::strip_tag(&mut last.content, "finding");
+                        crate::domain::tags::strip_tag(&mut last.llm_content, "finding");
+                    }
+                    // also retract any printed prefix of this finding so it doesn't
+                    // remain on stdout: shrink printed_up_to to the new content length
+                    if let Some(last) = app.messages.last() {
+                        printed_up_to = printed_up_to.min(last.content.len());
+                    }
+                }
             }
 
             if chunk.done {
@@ -347,11 +371,26 @@ fn run_stream_loop(app: &mut App, auto_yes: bool, show_thinking: bool, show_thin
                     if show_thinking_stderr { eprintln!("\n[/thinking]"); }
                 }
                 println!();
-                if let (Some(pt), Some(et), Some(ed)) = (
+                // print consolidated findings report (if any) before stats
+                let from = app.findings_at_stream_start;
+                if from < app.findings.len() {
+                    let new = &app.findings[from..];
+                    println!("\n## Findings ({})\n", new.len());
+                    for f in new {
+                        println!("{}", f.to_markdown());
+                    }
+                    println!();
+                    app.findings_at_stream_start = app.findings.len();
+                }
+                let stats = if let (Some(pt), Some(et), Some(ed)) = (
                     chunk.prompt_eval_count, chunk.eval_count, chunk.eval_duration,
                 ) {
                     let tps = et as f64 / (ed as f64 / 1_000_000_000.0);
                     eprintln!("[{tps:.1} tok/s · {et} response tokens · {pt} prompt eval]");
+                    Some((tps, et, pt))
+                } else { None };
+                if metrics {
+                    write_metrics_json(app, turn_started_at.elapsed().as_secs_f64(), tool_calls, stats);
                 }
                 return 0;
             }
@@ -395,6 +434,41 @@ fn ask_interactive(kind: &AskKind, question: &str, auto_yes: bool) -> String {
     }
 }
 
+/// Append a single-line JSON record with this turn's stats to
+/// `/tmp/cognilite-metrics-<session>.json`. Append-only so multiple turns in a
+/// long-running session accumulate; one JSON object per line so it's trivially
+/// jq-parseable for A/B analysis of neuron presets.
+fn write_metrics_json(
+    app: &App,
+    wall_secs: f64,
+    tool_calls: u64,
+    stats: Option<(f64, u64, u64)>,
+) {
+    let (tps, response_tokens, prompt_eval) = stats.unwrap_or((0.0, 0, 0));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let model = app.selected_model.as_deref().unwrap_or("");
+    let preset = app.active_preset.as_deref().unwrap_or("");
+    let line = serde_json::json!({
+        "ts": now,
+        "session_id": &app.session_id,
+        "model": model,
+        "preset": preset,
+        "tps": tps,
+        "response_tokens": response_tokens,
+        "prompt_eval": prompt_eval,
+        "tool_calls": tool_calls,
+        "findings": app.findings.len(),
+        "wall_secs": wall_secs,
+    }).to_string();
+    let path = std::env::temp_dir().join(format!("cognilite-metrics-{}.json", app.session_id));
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = std::io::Write::write_all(&mut f, line.as_bytes());
+        let _ = std::io::Write::write_all(&mut f, b"\n");
+        eprintln!("[metrics: {}]", path.display());
+    }
+}
+
 /// Returns the byte offset up to which `content[from..]` can be safely printed,
 /// skipping completed `<think>` blocks and stopping before any protocol tag.
 pub fn safe_print_boundary(content: &str, from: usize) -> usize {
@@ -405,6 +479,7 @@ pub fn safe_print_boundary(content: &str, from: usize) -> usize {
         "<patch>", "</patch>",
         "<mood>", "</mood>",
         "<preview", "</preview>",
+        "<finding", "</finding>",
     ];
     let mut pos = from;
     loop {
@@ -426,13 +501,81 @@ pub fn safe_print_boundary(content: &str, from: usize) -> usize {
         }
         if slice.len() < 2 { return abs; }
         let second = &slice[1..2];
-        if !matches!(second, "t" | "l" | "a" | "p" | "m" | "/") {
+        if !matches!(second, "t" | "l" | "a" | "p" | "m" | "f" | "/") {
             pos = abs + 1; continue;
         }
         if STOP_TAGS.iter().any(|tag| tag.starts_with(slice) || slice.starts_with(tag)) {
             return abs;
         }
         pos = abs + 1;
+    }
+}
+
+#[cfg(test)]
+mod safe_print_tests {
+    use super::safe_print_boundary;
+
+    #[test]
+    fn empty_content_returns_zero() {
+        assert_eq!(safe_print_boundary("", 0), 0);
+    }
+
+    #[test]
+    fn plain_text_returns_full_length() {
+        let s = "hello world, no tags here";
+        assert_eq!(safe_print_boundary(s, 0), s.len());
+    }
+
+    #[test]
+    fn skips_complete_think_block() {
+        let s = "<think>reasoning here</think>visible content";
+        // boundary should land at end (no stop tag found past </think>)
+        assert_eq!(safe_print_boundary(s, 0), s.len());
+    }
+
+    #[test]
+    fn stops_at_unclosed_think() {
+        let s = "prose <think>still thinking";
+        let pos = safe_print_boundary(s, 0);
+        assert_eq!(&s[..pos], "prose ");
+    }
+
+    #[test]
+    fn stops_before_tool_open() {
+        let s = "running <tool>ls</tool>";
+        let pos = safe_print_boundary(s, 0);
+        assert_eq!(&s[..pos], "running ");
+    }
+
+    #[test]
+    fn stops_before_finding_open() {
+        let s = "intro text <finding severity=\"high\">body";
+        let pos = safe_print_boundary(s, 0);
+        assert_eq!(&s[..pos], "intro text ");
+    }
+
+    #[test]
+    fn stops_before_partial_tag_prefix() {
+        // even an incomplete `<fin` should stop because it might extend to <finding
+        let s = "intro <fin";
+        let pos = safe_print_boundary(s, 0);
+        assert_eq!(&s[..pos], "intro ");
+    }
+
+    #[test]
+    fn skips_unrelated_lt_chars() {
+        // `<` followed by something that's not a known stop tag prefix should not block
+        let s = "if x < y then z";
+        assert_eq!(safe_print_boundary(s, 0), s.len());
+    }
+
+    #[test]
+    fn from_offset_resumes_correctly() {
+        let s = "header <think>x</think>body <tool>cmd</tool>";
+        // start scanning AFTER the </think> so we land at <tool>
+        let after_think = s.find("</think>").unwrap() + 8;
+        let pos = safe_print_boundary(s, after_think);
+        assert_eq!(&s[..pos], "header <think>x</think>body ");
     }
 }
 

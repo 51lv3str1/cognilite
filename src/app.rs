@@ -15,9 +15,12 @@ pub enum Screen {
     Chat,
 }
 
-/// Short unique ID (4 hex chars) to disambiguate participants with the same name.
+/// Short unique ID (8 hex chars / 32 bits) to disambiguate participants with the
+/// same display name. Birthday-bound at ~65k concurrent IDs before collisions
+/// become likely; the WS server retries on collision so practical room limits
+/// are far higher.
 pub fn new_session_id() -> String {
-    let mut buf = [0u8; 3];
+    let mut buf = [0u8; 4];
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
         use std::io::Read;
         let _ = f.read_exact(&mut buf);
@@ -26,9 +29,9 @@ pub fn new_session_id() -> String {
             .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u32;
         let p = std::process::id();
         let v = t ^ p;
-        buf = [v as u8, (v >> 8) as u8, (v >> 16) as u8];
+        buf = [v as u8, (v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8];
     }
-    format!("{:02x}{:02x}{:02x}", buf[0], buf[1], buf[2])
+    format!("{:02x}{:02x}{:02x}{:02x}", buf[0], buf[1], buf[2], buf[3])
 }
 
 /// Strip version tag from model name: "qwen3.6:latest" → "qwen3.6"
@@ -87,8 +90,9 @@ pub use crate::domain::config::{
 };
 pub use crate::domain::message::{Attachment, AttachmentKind, Message, Role, TokenStats};
 pub use crate::domain::tags::{
-    AskKind, InputRequest, extract_ask_tag, extract_load_neuron_tag, extract_mood_tag,
-    extract_patch_tag, extract_preview_tag, extract_tool_call,
+    AskKind, Finding, InputRequest, extract_ask_tag, extract_finding_tag,
+    extract_load_neuron_tag, extract_mood_tag, extract_patch_tag, extract_preview_tag,
+    extract_tool_call,
 };
 pub use crate::domain::prompt::{
     RuntimeMode, build_raw_prompt, build_runtime_context, detect_template_format,
@@ -210,6 +214,10 @@ pub struct App {
     pub highlight_cache: HashMap<PathBuf, (std::time::SystemTime, Vec<Line<'static>>)>,
     // neurons injected on-demand in the current conversation (Smart mode)
     pub injected_neurons: std::collections::HashSet<String>,
+    // accumulated <finding> tags emitted by the model across all turns
+    pub findings: Vec<Finding>,
+    // findings.len() at stream start; used to render only the new ones at done
+    pub findings_at_stream_start: usize,
     // remote WebSocket client connection (--remote mode)
     pub ws_tx: Option<std::net::TcpStream>,
     pub ws_rx: Option<mpsc::Receiver<crate::adapter::ws_client::WsClientFrame>>,
@@ -342,6 +350,8 @@ impl App {
             file_panel_attachment: None,
             highlight_cache: HashMap::new(),
             injected_neurons: std::collections::HashSet::new(),
+            findings: Vec::new(),
+            findings_at_stream_start: 0,
             ws_tx: None,
             ws_rx: None,
             local_models_rx: None,
@@ -588,6 +598,8 @@ impl App {
             self.ask_cursor = 0;
             self.current_mood = None;
             self.pending_patch = None;
+            self.findings.clear();
+            self.findings_at_stream_start = 0;
             self.screen = Screen::Chat;
             let project_map = crate::adapter::tools_native::build_project_map(&self.working_dir);
             self.runtime_context = build_runtime_context(&name, self.context_length, RuntimeMode::Tui, project_map.as_deref());
@@ -700,6 +712,9 @@ impl App {
         }
 
         // ── Local Ollama path ────────────────────────────────────────────
+        // Mark the cutoff so push_findings_report() at done emits only findings
+        // produced during this user turn (covers all tool-restart segments).
+        self.findings_at_stream_start = self.findings.len();
         let diff_note = self.collect_pinned_diffs();
 
         let (display, mut llm_content, attachments, images) =
@@ -753,12 +768,14 @@ impl App {
     ///
     /// Two paths:
     ///   1. Fresh turn (last API-visible message is user) → /api/chat as usual.
-    ///   2. Continuation (last API-visible message is an assistant with
-    ///      non-empty content — happens after a tool call injects its result
-    ///      into the assistant's llm_content) → /api/generate with raw:true,
-    ///      using a hand-built prompt that leaves the assistant turn OPEN.
-    ///      Without this, the chat template closes the turn and the model
-    ///      treats the tool output as "response complete" and emits stop.
+    ///      Tool results are user-role messages (`Role::Tool` → "user"), so
+    ///      this path covers the post-tool case too — the model sees a clean
+    ///      turn break and replies with new analysis.
+    ///   2. Raw continuation (last API-visible message is an assistant with
+    ///      non-empty content) → /api/generate with raw:true and the
+    ///      assistant turn left OPEN. Reserved for callers that explicitly
+    ///      want to continue an in-flight assistant turn — not used by the
+    ///      tool flow anymore.
     pub fn start_stream(&mut self) {
         let Some(model) = self.selected_model.clone() else {
             self.stream_state = StreamState::Error("No model selected".to_string());
@@ -1043,6 +1060,20 @@ impl App {
                             }
                             self.current_mood = Some(emoji);
                         }
+                        // detect <finding>...</finding> — accumulate, strip from display.
+                        // Loops until no more complete findings remain in this chunk so
+                        // bursts of multiple findings in one buffer flush all get parsed.
+                        loop {
+                            let f = self.messages.last()
+                                .filter(|m| m.role == Role::Assistant)
+                                .and_then(|m| extract_finding_tag(&m.content));
+                            let Some(f) = f else { break };
+                            self.findings.push(f);
+                            if let Some(last) = self.messages.last_mut() {
+                                crate::domain::tags::strip_tag(&mut last.content, "finding");
+                                crate::domain::tags::strip_tag(&mut last.llm_content, "finding");
+                            }
+                        }
                         // detect <preview path="..."/> — open file panel
                         let preview_path: Option<String> = if let Some(last) = self.messages.last() {
                             if last.role == Role::Assistant { extract_preview_tag(&last.content) } else { None }
@@ -1151,6 +1182,8 @@ impl App {
                         if let Some(last) = self.messages.last_mut() {
                             if last.role == Role::Assistant { last.tool_call = Some(display); }
                         }
+                        // emit a consolidated findings report if any accumulated this turn
+                        self.push_findings_report();
                         self.room_sync_done();
                         return;
                     }
@@ -1276,9 +1309,6 @@ impl App {
                     if last.role == Role::Assistant {
                         last.thinking_secs = self.thinking_end_secs
                             .or_else(|| self.stream_started_at.map(|t| t.elapsed().as_secs_f64()));
-                        // Same as local path: inject result into assistant llm_content so
-                        // the API never sees a "user" role carrying tool output.
-                        last.llm_content.push_str(&format!("\n[Tool output for: {command}]\n{result}"));
                     }
                 }
                 let label_display = if label.is_empty() { command.clone() } else { label };
@@ -1286,10 +1316,13 @@ impl App {
                     .map(str::to_string)
                     .unwrap_or_else(|| ".".to_string());
                 let size = result.len();
+                // Tool output as user-role message (Role::Tool → "user" in to_api_str).
+                // Mirrors the local-path fix: the model sees the result as a fresh
+                // user turn rather than embedded in its own assistant turn.
                 self.messages.push(Message {
                     role: Role::Tool,
                     content: result.clone(),
-                    llm_content: String::new(), // empty → excluded from API, UI-only
+                    llm_content: format!("[Tool output for: {command}]\n{result}"),
                     images: vec![],
                     attachments: vec![Attachment {
                         filename: fname, path: PathBuf::new(),
@@ -1854,6 +1887,8 @@ impl App {
         self.current_mood = None;
         self.pending_patch = None;
         self.injected_neurons.clear();
+        self.findings.clear();
+        self.findings_at_stream_start = 0;
     }
 
     // --- pinned files ---
@@ -1914,6 +1949,15 @@ impl App {
             }
             parts.push(section);
         }
+        // Working-memory notes — written via `<tool>note add ...</tool>` and
+        // persisted to /tmp/cognilite-notes-<session>.md. Re-read every turn
+        // so the model sees its own scratchpad survive across turns.
+        if let Some(notes) = crate::adapter::tools_native::read_notes(&self.session_id) {
+            let trimmed = notes.trim();
+            if !trimmed.is_empty() {
+                parts.push(format!("## Notes (working memory)\n\n{trimmed}"));
+            }
+        }
         parts.join("\n\n---\n\n")
     }
 
@@ -1950,6 +1994,42 @@ impl App {
         });
     }
 
+    /// Push a `Role::Tool` message with a markdown report of findings emitted
+    /// since the last user message. No-op if no new findings. Updates the cursor
+    /// so subsequent calls in the same turn don't duplicate the report.
+    pub(crate) fn push_findings_report(&mut self) {
+        let from = self.findings_at_stream_start;
+        if from >= self.findings.len() { return; }
+        let new = &self.findings[from..];
+        let mut body = format!("## Findings ({})\n\n", new.len());
+        for f in new {
+            body.push_str(&f.to_markdown());
+            body.push('\n');
+        }
+        let label = format!("\u{2691} Findings \u{203a} {}", new.len());
+        let size = body.len();
+        self.messages.push(Message {
+            role: Role::Tool,
+            content: body.clone(),
+            // do NOT feed the report back to the model — it would just see a
+            // restatement of its own findings and waste context on the next turn.
+            llm_content: String::new(),
+            images: vec![],
+            attachments: vec![Attachment {
+                filename: "findings".to_string(),
+                path: PathBuf::new(),
+                kind: AttachmentKind::Text,
+                size,
+            }],
+            thinking: String::new(),
+            thinking_secs: None,
+            stats: None,
+            tool_call: Some(label),
+            tool_collapsed: false,
+        });
+        self.findings_at_stream_start = self.findings.len();
+    }
+
     pub fn export_chat(&mut self) {
         if self.messages.is_empty() { return; }
         let now = std::time::SystemTime::now()
@@ -1981,6 +2061,8 @@ impl App {
                     self.scroll = u16::MAX;
                     self.auto_scroll = true;
                     self.injected_neurons.clear();
+                    self.findings.clear();
+                    self.findings_at_stream_start = 0;
                     let name = path.file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("chat");
@@ -2228,4 +2310,76 @@ impl App {
         (system, history)
     }
 
+}
+
+#[cfg(test)]
+mod mention_tests {
+    use super::{extract_mentions, is_mentioned};
+
+    #[test]
+    fn extract_empty_returns_none() {
+        assert!(extract_mentions("hello world").is_empty());
+    }
+
+    #[test]
+    fn extract_simple_mention() {
+        assert_eq!(extract_mentions("hi #alice"), vec!["alice"]);
+    }
+
+    #[test]
+    fn extract_mention_with_session_id() {
+        assert_eq!(extract_mentions("ping #qwen3#a3f2b1c8 now"), vec!["qwen3#a3f2b1c8"]);
+    }
+
+    #[test]
+    fn extract_mention_strips_trailing_punctuation() {
+        // "#alice." should yield "alice", not "alice."
+        assert_eq!(extract_mentions("hi #alice, how are you?"), vec!["alice"]);
+    }
+
+    #[test]
+    fn extract_lowercases_mention() {
+        // mentions are normalized to lowercase for case-insensitive matching
+        assert_eq!(extract_mentions("hi #Alice"), vec!["alice"]);
+    }
+
+    #[test]
+    fn extract_multiple_mentions() {
+        let m = extract_mentions("#alice and #bob");
+        assert!(m.contains(&"alice".to_string()));
+        assert!(m.contains(&"bob".to_string()));
+    }
+
+    #[test]
+    fn extract_skips_invalid_chars() {
+        // names with two hashes (not just one for session_id) are invalid
+        assert!(extract_mentions("#a#b#c").is_empty());
+    }
+
+    #[test]
+    fn is_mentioned_full_form_matches() {
+        assert!(is_mentioned("alice#a3f2b1c8", "hey #alice#a3f2b1c8 check this"));
+    }
+
+    #[test]
+    fn is_mentioned_all_keyword_matches() {
+        assert!(is_mentioned("alice#a3f2b1c8", "broadcast: #all please review"));
+    }
+
+    #[test]
+    fn is_mentioned_different_session_id_no_match() {
+        // "#alice#xxxx" should NOT match "alice#a3f2b1c8" — session IDs differ
+        assert!(!is_mentioned("alice#a3f2b1c8", "hey #alice#deadbeef"));
+    }
+
+    #[test]
+    fn is_mentioned_no_mention_returns_false() {
+        assert!(!is_mentioned("alice#a3f2b1c8", "no one tagged here"));
+    }
+
+    #[test]
+    fn is_mentioned_is_case_insensitive() {
+        // mentions get lowercased on extract; comparison is case-insensitive
+        assert!(is_mentioned("alice#a3f2b1c8", "hey #ALICE#A3F2B1C8 ping"));
+    }
 }

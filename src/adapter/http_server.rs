@@ -2,9 +2,16 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Only one session at a time may own the terminal stdin for interactive <ask> prompts.
 static STDIN_LOCK: Mutex<()> = Mutex::new(());
+
+/// Maximum concurrent connections (HTTP /chat + WebSocket sessions combined).
+/// Each connection costs a thread, an Ollama request slot, and ~MB of context;
+/// without a cap a misbehaving client could fork-bomb the server.
+const MAX_CONNECTIONS: usize = 64;
+static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
 /// Starts the HTTP server. Blocks until the process is killed.
 pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool, rooms: crate::adapter::ws_server::RoomRegistry, silent: bool) {
@@ -30,11 +37,25 @@ pub fn run(ollama_url: &str, host: &str, port: u16, thinking_server: bool, rooms
 
     for stream in listener.incoming() {
         match stream {
-            Ok(s) => {
+            Ok(mut s) => {
+                let active = ACTIVE_CONNECTIONS.load(Ordering::Relaxed);
+                if active >= MAX_CONNECTIONS {
+                    let msg = b"server at capacity, try again later";
+                    let _ = write!(s, "HTTP/1.1 503 Service Unavailable\r\n\
+                                       Retry-After: 5\r\n\
+                                       Content-Length: {}\r\n\r\n", msg.len());
+                    let _ = s.write_all(msg);
+                    if !silent { eprintln!("[server] rejected connection — at cap ({MAX_CONNECTIONS})"); }
+                    continue;
+                }
+                ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
                 let exe    = exe.clone();
                 let ollama = ollama_url.to_string();
                 let rooms  = rooms.clone();
-                std::thread::spawn(move || handle(s, exe, ollama, thinking_server, rooms, silent));
+                std::thread::spawn(move || {
+                    handle(s, exe, ollama, thinking_server, rooms, silent);
+                    ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+                });
             }
             Err(e) => { if !silent { eprintln!("[server] accept error: {e}"); } }
         }

@@ -203,6 +203,7 @@ fn parse_headless_args(argv: &[String]) -> Option<headless::HeadlessArgs> {
             "--thinking" => { ha.thinking = true; }
             "--thinking-stderr" => { ha.thinking_stderr = true; }
             "--server-mode" => { ha.server_mode = true; }
+            "--metrics" => { ha.metrics = true; }
             "--username" => {
                 i += 1; if i < argv.len() { ha.username = Some(argv[i].clone()); }
             }
